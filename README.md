@@ -6,12 +6,12 @@ Encrypted peer-to-peer tunnel MVP built with Kotlin, Compose Multiplatform, and 
 
 This repository currently contains a compact, build-oriented MVP scaffold:
 
-- `shared`: Kotlin Multiplatform shared model, peer facade, and Compose UI.
+- `shared`: Kotlin Multiplatform shared model, peer facade, MVP DLP packet serializer, and Compose UI.
 - `desktop`: Compose Desktop application entrypoint.
 - `android`: Android application entrypoint and manifest.
 - GitHub Actions CI runs Gradle project checks, shared desktop tests, desktop compilation, and Android debug APK assembly.
 
-The networking and cryptography layer is intentionally minimal in this checkpoint. The next milestones are to replace the placeholder `NetworkPeer` behavior with the full DirectLink protocol pieces: DLP packet crypto, STUN/NAT detection, UDP hole punching, and encrypted tunnel sessions.
+The DLP packet layer now has a small explicit model, password validation, TTL validation, and unit tests. The networking and production cryptography layer is still intentionally minimal in this checkpoint; the next milestones are to replace the MVP packet hashing with real encrypted packet crypto, then add STUN/NAT detection, UDP hole punching, and encrypted tunnel sessions.
 
 ## Build
 
@@ -35,6 +35,6 @@ gradle :desktop:run
 ## Next Milestones
 
 1. Add a Gradle wrapper once a local JDK/Gradle environment is available.
-2. Restore/port the DLP serializer and cryptography layer into the JVM/Android shared source set.
-3. Restore/port STUN, NAT detection, and UDP hole punching.
-4. Add integration tests around packet generation/import and tunnel session behavior.
+2. Replace MVP password hashing with encrypted DLP packet storage using Argon2id + ChaCha20-Poly1305.
+3. Add STUN, NAT detection, and UDP hole punching.
+4. Add encrypted tunnel session tests around packet generation/import and tunnel behavior.
