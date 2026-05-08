@@ -1,0 +1,4 @@
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**
+-keep class com.kirivsoft.directlink.** { *; }
+-keepattributes *Annotation*, InnerClasses
