@@ -1,5 +1,7 @@
 package com.kirivsoft.directlink.packet
 
+import com.kirivsoft.directlink.network.NatType
+
 data class DlpPacket(
     val version: String = CURRENT_VERSION,
     val packetId: String,
@@ -8,6 +10,9 @@ data class DlpPacket(
     val platform: String,
     val appVersion: String,
     val fingerprint: String,
+    val publicIp: String,
+    val publicPort: Int,
+    val natType: NatType,
     val issuedAt: Long,
     val expiresAt: Long
 ) {
