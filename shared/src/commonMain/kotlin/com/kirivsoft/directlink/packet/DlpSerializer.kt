@@ -45,7 +45,9 @@ class DlpSerializer {
 
     fun parse(file: File, password: String, nowSeconds: Long = System.currentTimeMillis() / 1000): DlpParseResult {
         val props = runCatching {
-            Properties().apply { file.inputStream().use(::load) }
+            Properties().apply {
+                file.inputStream().use { input -> load(input) }
+            }
         }.getOrElse { return DlpParseResult.Malformed("Cannot read packet: ${it.message}") }
 
         val packet = runCatching {
