@@ -9,8 +9,7 @@ data class DlpPacket(
     val appVersion: String,
     val fingerprint: String,
     val issuedAt: Long,
-    val expiresAt: Long,
-    val passwordHash: String
+    val expiresAt: Long
 ) {
     fun isExpired(nowSeconds: Long = System.currentTimeMillis() / 1000): Boolean = nowSeconds >= expiresAt
 
