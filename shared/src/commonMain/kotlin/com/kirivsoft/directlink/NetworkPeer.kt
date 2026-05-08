@@ -65,7 +65,7 @@ class NetworkPeer(
             password = password,
             ttlSeconds = config.packetTtlSeconds
         )
-        serializer.write(packet, file)
+        serializer.write(packet, password, file)
         _state.update { it.copy(phase = PeerPhase.PacketGenerated(file, fingerprint, packet.expiresAt)) }
         _events.emit(PeerEvent.DlpPacketReady(file, fingerprint))
         file
