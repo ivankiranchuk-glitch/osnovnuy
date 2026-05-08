@@ -2,6 +2,7 @@ package com.kirivsoft.directlink.packet
 
 import com.kirivsoft.directlink.crypto.DecryptResult
 import com.kirivsoft.directlink.crypto.DlpCrypto
+import com.kirivsoft.directlink.network.NatType
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -17,6 +18,9 @@ class DlpSerializer(
         platform: String,
         appVersion: String,
         fingerprint: String,
+        publicIp: String,
+        publicPort: Int,
+        natType: NatType,
         password: String,
         ttlSeconds: Long,
         nowSeconds: Long = System.currentTimeMillis() / 1000
@@ -27,6 +31,9 @@ class DlpSerializer(
         platform = platform,
         appVersion = appVersion,
         fingerprint = fingerprint,
+        publicIp = publicIp,
+        publicPort = publicPort,
+        natType = natType,
         issuedAt = nowSeconds,
         expiresAt = nowSeconds + ttlSeconds
     )
@@ -61,6 +68,9 @@ class DlpSerializer(
                 platform = props.require("platform"),
                 appVersion = props.require("appVersion"),
                 fingerprint = props.require("fingerprint"),
+                publicIp = props.require("publicIp"),
+                publicPort = props.require("publicPort").toInt(),
+                natType = NatType.valueOf(props.require("natType")),
                 issuedAt = props.require("issuedAt").toLong(),
                 expiresAt = props.require("expiresAt").toLong()
             )
@@ -84,6 +94,9 @@ class DlpSerializer(
             setProperty("platform", packet.platform)
             setProperty("appVersion", packet.appVersion)
             setProperty("fingerprint", packet.fingerprint)
+            setProperty("publicIp", packet.publicIp)
+            setProperty("publicPort", packet.publicPort.toString())
+            setProperty("natType", packet.natType.name)
             setProperty("issuedAt", packet.issuedAt.toString())
             setProperty("expiresAt", packet.expiresAt.toString())
         }
