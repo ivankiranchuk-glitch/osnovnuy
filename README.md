@@ -6,12 +6,14 @@ Encrypted peer-to-peer tunnel MVP built with Kotlin, Compose Multiplatform, and 
 
 This repository currently contains a compact, build-oriented MVP scaffold:
 
-- `shared`: Kotlin Multiplatform shared model, peer facade, MVP DLP packet serializer, and Compose UI.
+- `shared`: Kotlin Multiplatform shared model, peer facade, encrypted MVP DLP packet serializer, and Compose UI.
 - `desktop`: Compose Desktop application entrypoint.
 - `android`: Android application entrypoint and manifest.
 - GitHub Actions CI runs Gradle project checks, shared desktop tests, desktop compilation, and Android debug APK assembly.
 
-The DLP packet layer now has a small explicit model, password validation, TTL validation, and unit tests. The networking and production cryptography layer is still intentionally minimal in this checkpoint; the next milestones are to replace the MVP packet hashing with real encrypted packet crypto, then add STUN/NAT detection, UDP hole punching, and encrypted tunnel sessions.
+The DLP packet layer now has an explicit model, encrypted container format, password validation through AEAD authentication, TTL validation, and unit tests. The current MVP container uses PBKDF2-HMAC-SHA256 plus AES-GCM because those primitives are available from the JDK on desktop and Android. The next production hardening step is to switch the packet KDF/cipher suite to the intended Argon2id + ChaCha20-Poly1305 implementation.
+
+Networking is still intentionally minimal in this checkpoint. Upcoming milestones add STUN/NAT detection, UDP hole punching, and encrypted tunnel sessions.
 
 ## Build
 
@@ -35,6 +37,6 @@ gradle :desktop:run
 ## Next Milestones
 
 1. Add a Gradle wrapper once a local JDK/Gradle environment is available.
-2. Replace MVP password hashing with encrypted DLP packet storage using Argon2id + ChaCha20-Poly1305.
+2. Upgrade encrypted DLP packet storage to Argon2id + ChaCha20-Poly1305.
 3. Add STUN, NAT detection, and UDP hole punching.
 4. Add encrypted tunnel session tests around packet generation/import and tunnel behavior.
