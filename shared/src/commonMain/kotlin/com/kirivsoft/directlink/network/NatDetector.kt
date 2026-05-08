@@ -25,18 +25,46 @@ data class NatDetectionResult(
     val portStable: Boolean
 )
 
-class NatDetector {
+class NatDetector(
+    private val stunProbe: StunProbe = StunClient(),
+    private val stunServers: List<Pair<String, Int>> = DEFAULT_STUN_SERVERS
+) {
     fun detect(preferredUdpPort: Int = 0, preferredTcpPort: Int = 0): NatDetectionResult {
         val udpPort = findAvailableUdpPort(preferredUdpPort)
+        val tcpPort = findAvailableTcpPort(preferredTcpPort)
+        val localIp = getLocalIpAddress()
+
+        val stunResults = stunServers
+            .asSequence()
+            .map { (host, port) -> stunProbe.query(host, port, udpPort) }
+            .toList()
+
+        val successes = stunResults.filterIsInstance<StunResult.Success>()
+        val first = successes.firstOrNull()
+        if (first == null) {
+            return NatDetectionResult(
+                publicIp = "0.0.0.0",
+                publicPort = udpPort,
+                localIp = localIp,
+                localPort = udpPort,
+                tcpPort = tcpPort,
+                natType = NatType.UNKNOWN,
+                stunServer = stunResults.firstOrNull()?.let { (it as? StunResult.Error)?.server } ?: "not-configured",
+                portStable = false
+            )
+        }
+
+        val portStable = successes.map { it.publicPort }.distinct().size == 1
+        val sameAddress = first.publicIp == localIp && first.publicPort == udpPort
         return NatDetectionResult(
-            publicIp = "0.0.0.0",
-            publicPort = udpPort,
-            localIp = getLocalIpAddress(),
+            publicIp = first.publicIp,
+            publicPort = first.publicPort,
+            localIp = localIp,
             localPort = udpPort,
-            tcpPort = findAvailableTcpPort(preferredTcpPort),
-            natType = NatType.UNKNOWN,
-            stunServer = "not-configured",
-            portStable = false
+            tcpPort = tcpPort,
+            natType = if (sameAddress) NatType.OPEN else NatType.UNKNOWN,
+            stunServer = first.server,
+            portStable = portStable
         )
     }
 
@@ -60,4 +88,12 @@ class NatDetector {
             .firstOrNull { !it.isLoopbackAddress }
             ?.hostAddress
     }.getOrNull() ?: "127.0.0.1"
+
+    companion object {
+        val DEFAULT_STUN_SERVERS = listOf(
+            "stun.l.google.com" to 19302,
+            "stun1.l.google.com" to 19302,
+            "stun.cloudflare.com" to 3478
+        )
+    }
 }
