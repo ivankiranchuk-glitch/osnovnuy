@@ -1,5 +1,6 @@
 package com.kirivsoft.directlink
 
+import com.kirivsoft.directlink.network.NatDetector
 import com.kirivsoft.directlink.packet.DlpParseResult
 import com.kirivsoft.directlink.packet.DlpSerializer
 import kotlinx.coroutines.CoroutineScope
@@ -20,7 +21,8 @@ import java.util.UUID
 class NetworkPeer(
     private val config: PeerConfig,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
-    private val serializer: DlpSerializer = DlpSerializer()
+    private val serializer: DlpSerializer = DlpSerializer(),
+    private val natDetector: NatDetector = NatDetector()
 ) {
     private val _state = MutableStateFlow(NetworkPeerState())
     val state: StateFlow<NetworkPeerState> = _state.asStateFlow()
@@ -36,16 +38,15 @@ class NetworkPeer(
 
     suspend fun initialize() = withContext(Dispatchers.IO) {
         _state.update { it.copy(phase = PeerPhase.GatheringNetwork) }
-        val udpPort = if (config.preferredUdpPort > 0) config.preferredUdpPort else 49152
-        val tcpPort = if (config.preferredTcpPort > 0) config.preferredTcpPort else 49153
+        val nat = natDetector.detect(config.preferredUdpPort, config.preferredTcpPort)
         _state.update {
             it.copy(
                 phase = PeerPhase.Ready(
-                    publicIp = "0.0.0.0",
-                    localIp = "127.0.0.1",
-                    udpPort = udpPort,
-                    tcpPort = tcpPort,
-                    natType = "UNKNOWN",
+                    publicIp = nat.publicIp,
+                    localIp = nat.localIp,
+                    udpPort = nat.localPort,
+                    tcpPort = nat.tcpPort,
+                    natType = nat.natType,
                     fingerprint = fingerprint
                 )
             )
