@@ -1,5 +1,6 @@
 package com.kirivsoft.directlink.packet
 
+import com.kirivsoft.directlink.network.NatType
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -17,7 +18,11 @@ class DlpSerializerTest {
         val result = serializer.parse(file, "pass", nowSeconds = 110)
 
         assertTrue(result is DlpParseResult.Success)
-        assertEquals("Laptop", (result as DlpParseResult.Success).packet.deviceName)
+        result as DlpParseResult.Success
+        assertEquals("Laptop", result.packet.deviceName)
+        assertEquals("203.0.113.10", result.packet.publicIp)
+        assertEquals(41000, result.packet.publicPort)
+        assertEquals(NatType.RESTRICTED, result.packet.natType)
         file.delete()
     }
 
@@ -64,6 +69,9 @@ class DlpSerializerTest {
         platform = "JUnit",
         appVersion = "0.1.0",
         fingerprint = "abc123",
+        publicIp = "203.0.113.10",
+        publicPort = 41000,
+        natType = NatType.RESTRICTED,
         password = "pass",
         ttlSeconds = ttlSeconds,
         nowSeconds = 100
