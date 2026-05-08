@@ -17,6 +17,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,7 +41,7 @@ fun DirectLinkApp(
     val scope = rememberCoroutineScope()
     var password by remember { mutableStateOf("") }
     var importPath by remember { mutableStateOf("") }
-    val state by peer.state.collectAsStateCompat()
+    val state by peer.state.collectAsState()
 
     LaunchedEffect(Unit) {
         peer.events.collect { event ->
@@ -108,13 +109,6 @@ fun DirectLinkApp(
         }
     }
 }
-
-@Composable
-private fun NetworkPeer.stateCollect() = state.collectAsStateCompat()
-
-@Composable
-private fun <T> kotlinx.coroutines.flow.StateFlow<T>.collectAsStateCompat(): androidx.compose.runtime.State<T> =
-    androidx.compose.runtime.collectAsState(value)
 
 private fun phaseText(phase: PeerPhase): String = when (phase) {
     PeerPhase.Idle -> "Idle"
