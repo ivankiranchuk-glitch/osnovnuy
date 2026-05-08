@@ -1,5 +1,6 @@
 package com.kirivsoft.directlink
 
+import com.kirivsoft.directlink.network.NatType
 import java.io.File
 
 sealed class PeerPhase {
@@ -10,7 +11,7 @@ sealed class PeerPhase {
         val localIp: String,
         val udpPort: Int,
         val tcpPort: Int,
-        val natType: String,
+        val natType: NatType,
         val fingerprint: String
     ) : PeerPhase()
     data class PacketGenerated(
