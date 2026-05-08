@@ -1,0 +1,8 @@
+-keep class org.bouncycastle.** { *; }
+-dontwarn org.bouncycastle.**
+-keep class com.kirivsoft.directlink.** { *; }
+-keepattributes *Annotation*, InnerClasses
+-dontnote kotlinx.serialization.AnnotationsKt
+-keepclassmembers class kotlinx.serialization.json.** { *** Companion; }
+-keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
+-keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
