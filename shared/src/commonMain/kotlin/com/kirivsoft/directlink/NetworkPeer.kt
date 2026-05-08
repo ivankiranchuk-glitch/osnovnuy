@@ -1,5 +1,7 @@
 package com.kirivsoft.directlink
 
+import com.kirivsoft.directlink.packet.DlpParseResult
+import com.kirivsoft.directlink.packet.DlpSerializer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -13,12 +15,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.security.MessageDigest
 import java.util.UUID
 
 class NetworkPeer(
     private val config: PeerConfig,
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
+    private val serializer: DlpSerializer = DlpSerializer()
 ) {
     private val _state = MutableStateFlow(NetworkPeerState())
     val state: StateFlow<NetworkPeerState> = _state.asStateFlow()
@@ -54,35 +56,33 @@ class NetworkPeer(
         val dir = outputDir ?: createTempDir("directlink_")
         dir.mkdirs()
         val file = File(dir, "directlink_${System.currentTimeMillis()}.dlp")
-        val expiresAt = System.currentTimeMillis() / 1000 + config.packetTtlSeconds
-        file.writeText(
-            listOf(
-                "DirectLink MVP packet",
-                "device=${config.deviceName}",
-                "uuid=${config.deviceUuid}",
-                "platform=${config.platform}",
-                "fingerprint=$fingerprint",
-                "expiresAt=$expiresAt",
-                "passwordHash=${sha256(password.toByteArray()).joinToString("") { b -> "%02x".format(b) }}"
-            ).joinToString("\n")
+        val packet = serializer.buildPacket(
+            deviceName = config.deviceName,
+            deviceUuid = config.deviceUuid,
+            platform = config.platform,
+            appVersion = config.appVersion,
+            fingerprint = fingerprint,
+            password = password,
+            ttlSeconds = config.packetTtlSeconds
         )
-        _state.update { it.copy(phase = PeerPhase.PacketGenerated(file, fingerprint, expiresAt)) }
+        serializer.write(packet, file)
+        _state.update { it.copy(phase = PeerPhase.PacketGenerated(file, fingerprint, packet.expiresAt)) }
         _events.emit(PeerEvent.DlpPacketReady(file, fingerprint))
         file
     }
 
     suspend fun importDlpPacket(file: File, password: String): String? = withContext(Dispatchers.IO) {
-        val text = runCatching { file.readText() }.getOrElse {
-            _state.update { state -> state.copy(phase = PeerPhase.Error("Cannot read DLP packet: ${it.message}")) }
-            return@withContext null
+        when (val result = serializer.parse(file, password)) {
+            is DlpParseResult.Success -> {
+                importedPeerName = result.packet.deviceName
+                _state.update { it.copy(phase = PeerPhase.AwaitingConnection(result.packet.deviceName)) }
+                result.packet.deviceName
+            }
+            is DlpParseResult.InvalidPassword -> failImport(result.reason)
+            is DlpParseResult.Expired -> failImport("DLP packet expired")
+            is DlpParseResult.Malformed -> failImport(result.reason)
+            is DlpParseResult.UnsupportedVersion -> failImport("Unsupported DLP version: ${result.found}")
         }
-        val name = text.lineSequence()
-            .firstOrNull { it.startsWith("device=") }
-            ?.removePrefix("device=")
-            ?: file.nameWithoutExtension
-        importedPeerName = name
-        _state.update { it.copy(phase = PeerPhase.AwaitingConnection(name)) }
-        name
     }
 
     suspend fun connect(timeoutMs: Long = 30_000L) = withContext(Dispatchers.IO) {
@@ -116,5 +116,8 @@ class NetworkPeer(
         _state.update { it.copy(phase = PeerPhase.Idle) }
     }
 
-    private fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
+    private fun failImport(reason: String): String? {
+        _state.update { it.copy(phase = PeerPhase.Error(reason)) }
+        return null
+    }
 }
