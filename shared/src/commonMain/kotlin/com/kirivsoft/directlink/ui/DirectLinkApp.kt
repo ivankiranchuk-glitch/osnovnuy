@@ -42,6 +42,7 @@ fun DirectLinkApp(
     var password by remember { mutableStateOf("") }
     var importPath by remember { mutableStateOf("") }
     val state by peer.state.collectAsState()
+    fun packetPassword(): String = password.ifBlank { "directlink" }
 
     LaunchedEffect(Unit) {
         peer.events.collect { event ->
@@ -73,7 +74,7 @@ fun DirectLinkApp(
                 Button(onClick = { scope.launch { peer.initialize() } }) {
                     Text("Initialize")
                 }
-                Button(onClick = { scope.launch { peer.generateDlpPacket(password.ifBlank { "directlink" }) } }) {
+                Button(onClick = { scope.launch { peer.generateDlpPacket(packetPassword()) } }) {
                     Text("Create .dlp")
                 }
             }
@@ -89,7 +90,7 @@ fun DirectLinkApp(
                 Button(onClick = { onPickFile { importPath = it } }) {
                     Text("Pick file")
                 }
-                Button(onClick = { scope.launch { peer.importDlpPacket(File(importPath), password) } }) {
+                Button(onClick = { scope.launch { peer.importDlpPacket(File(importPath), packetPassword()) } }) {
                     Text("Import")
                 }
                 Button(onClick = { scope.launch { peer.connect() } }) {
