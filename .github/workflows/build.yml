@@ -27,6 +27,9 @@ jobs:
       - name: Check project model
         run: gradle projects
 
+      - name: Run shared desktop tests
+        run: gradle :shared:desktopTest
+
       - name: Build desktop classes
         run: gradle :desktop:compileKotlinJvm
 
