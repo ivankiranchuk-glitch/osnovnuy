@@ -33,11 +33,13 @@ class UdpTunnelSession(
     private val onFileChunk: (FileChunk) -> Unit = {},
     private val onFileEnd: (FileEnd) -> Unit = {},
     private val onFileAck: (FileAck) -> Unit = {},
+    private val onFileSendProgress: (FileTransferProgress) -> Unit = {},
     private val cipher: TunnelCipher? = null,
     private val onClosed: (String) -> Unit
 ) {
     private val nextMessageId = AtomicLong(1)
     private val chunkAcknowledgements = ConcurrentHashMap<Long, MutableSet<Int>>()
+    private val outgoingFiles = ConcurrentHashMap<Long, OutgoingFileTransfer>()
     private var receiveJob: Job? = null
 
     fun start() {
@@ -61,6 +63,7 @@ class UdpTunnelSession(
                         is TunnelFrame.FileEndFrame -> onFileEnd(frame.end)
                         is TunnelFrame.FileAckFrame -> {
                             chunkAcknowledgements[frame.ack.transferId]?.add(frame.ack.index)
+                            reportSendProgress(frame.ack.transferId)
                             onFileAck(frame.ack)
                         }
                         null -> Unit
@@ -91,6 +94,8 @@ class UdpTunnelSession(
         val chunks = bytes.toChunks(chunkSize)
         val acked = Collections.newSetFromMap(ConcurrentHashMap<Int, Boolean>())
         chunkAcknowledgements[transferId] = acked
+        outgoingFiles[transferId] = OutgoingFileTransfer(name, bytes.size.toLong(), chunks.map { it.size.toLong() })
+        reportSendProgress(transferId)
 
         try {
             sendFrame(TunnelFrameCodec.encodeFileStart(transferId, name, bytes.size.toLong(), sha256))
@@ -99,9 +104,11 @@ class UdpTunnelSession(
             }
             waitForMissingAcks(acked, chunks.size, chunks, transferId)
             sendFrame(TunnelFrameCodec.encodeFileEnd(transferId, chunks.size, sha256))
+            reportSendProgress(transferId)
             return transferId
         } finally {
             chunkAcknowledgements.remove(transferId)
+            outgoingFiles.remove(transferId)
         }
     }
 
@@ -109,6 +116,7 @@ class UdpTunnelSession(
         receiveJob?.cancel()
         receiveJob = null
         chunkAcknowledgements.clear()
+        outgoingFiles.clear()
         socket.close()
     }
 
@@ -141,6 +149,20 @@ class UdpTunnelSession(
         }
     }
 
+    private fun reportSendProgress(transferId: Long) {
+        val transfer = outgoingFiles[transferId] ?: return
+        val acked = chunkAcknowledgements[transferId].orEmpty()
+        val completedBytes = acked.sumOf { index -> transfer.chunkSizes.getOrNull(index) ?: 0L }
+        onFileSendProgress(
+            FileTransferProgress(
+                transferId = transferId,
+                name = transfer.name,
+                completedBytes = completedBytes.coerceAtMost(transfer.sizeBytes),
+                totalBytes = transfer.sizeBytes
+            )
+        )
+    }
+
     private fun sendFileAck(transferId: Long, index: Int) {
         sendFrame(TunnelFrameCodec.encodeFileAck(transferId, index))
     }
@@ -159,6 +181,15 @@ class UdpTunnelSession(
         private const val FILE_ACK_POLL_MS = 20L
         private const val FILE_CHUNK_RETRIES = 3
     }
+}
+
+data class FileTransferProgress(
+    val transferId: Long,
+    val name: String,
+    val completedBytes: Long,
+    val totalBytes: Long
+) {
+    val isComplete: Boolean get() = totalBytes == 0L || completedBytes >= totalBytes
 }
 
 class TunnelCipher private constructor(
@@ -410,3 +441,9 @@ private fun ByteArray.toChunks(chunkSize: Int): List<ByteArray> {
     }
     return chunks
 }
+
+private data class OutgoingFileTransfer(
+    val name: String,
+    val sizeBytes: Long,
+    val chunkSizes: List<Long>
+)
