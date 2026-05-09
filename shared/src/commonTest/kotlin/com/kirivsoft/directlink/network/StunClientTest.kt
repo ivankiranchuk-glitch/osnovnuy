@@ -55,8 +55,8 @@ class StunClientTest {
             .toByteArray()
 
         val attr = ByteBuffer.allocate(12).order(ByteOrder.BIG_ENDIAN)
-            .putShort(0x0020)
-            .putShort(8)
+            .putShort(0x0020.toShort())
+            .putShort(8.toShort())
             .put(0.toByte())
             .put(0x01.toByte())
             .putShort(encodedPort.toShort())
@@ -64,7 +64,7 @@ class StunClientTest {
             .array()
 
         return ByteBuffer.allocate(20 + attr.size).order(ByteOrder.BIG_ENDIAN)
-            .putShort(0x0101)
+            .putShort(0x0101.toShort())
             .putShort(attr.size.toShort())
             .putInt(cookie)
             .put(txId)
