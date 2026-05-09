@@ -13,7 +13,7 @@ This repository currently contains a compact, build-oriented MVP scaffold:
 
 The DLP packet layer now has an explicit model, encrypted container format, password validation through AEAD authentication, TTL validation, peer public endpoint fields, and unit tests. The current MVP container uses PBKDF2-HMAC-SHA256 plus AES-GCM because those primitives are available from the JDK on desktop and Android. The next production hardening step is to switch the packet KDF/cipher suite to the intended Argon2id + ChaCha20-Poly1305 implementation.
 
-Networking now has a typed NAT detection contract, local IP lookup, UDP/TCP port selection, an RFC 5389-style STUN Binding Request client/parser for `MAPPED-ADDRESS` and `XOR-MAPPED-ADDRESS`, an initial UDP hole-punching flow, and a UDP tunnel session for text and chunked file frames. The peer facade stores imported DLP endpoint details, attempts a direct UDP punch, keeps the socket open after a successful punch, sends text through the tunnel session, and can frame outgoing files with SHA-256 verification on receive. Relay fallback, retransmission/acknowledgement, and encryption of tunnel payloads are still future milestones.
+Networking now has a typed NAT detection contract, local IP lookup, UDP/TCP port selection, an RFC 5389-style STUN Binding Request client/parser for `MAPPED-ADDRESS` and `XOR-MAPPED-ADDRESS`, an initial UDP hole-punching flow, and a UDP tunnel session for text and chunked file frames. The peer facade stores imported DLP endpoint details, attempts a direct UDP punch, keeps the socket open after a successful punch, sends text through the tunnel session, and can frame outgoing files with SHA-256 verification on receive. File chunks are acknowledged by the receiver, and missing chunks are retried before the final file frame is sent. Relay fallback and encryption of tunnel payloads are still future milestones.
 
 ## Build
 
@@ -52,8 +52,8 @@ Desktop run:
 
 ## Next Milestones
 
-1. Add acknowledgement, timeout, and retransmission handling for file chunks.
-2. Encrypt UDP tunnel payloads after peer connection is established.
-3. Upgrade encrypted DLP packet storage to Argon2id + ChaCha20-Poly1305.
-4. Add relay fallback and stronger NAT classification around the UDP punch flow.
-5. Add end-to-end two-peer integration tests for DLP import, punch, send, receive, and file transfer.
+1. Encrypt UDP tunnel payloads after peer connection is established.
+2. Upgrade encrypted DLP packet storage to Argon2id + ChaCha20-Poly1305.
+3. Add relay fallback and stronger NAT classification around the UDP punch flow.
+4. Add end-to-end two-peer integration tests for DLP import, punch, send, receive, and file transfer.
+5. Surface incoming text/file events in the desktop and Android UI.
