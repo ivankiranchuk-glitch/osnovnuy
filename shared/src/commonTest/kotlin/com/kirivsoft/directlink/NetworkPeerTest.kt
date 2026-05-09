@@ -1,11 +1,21 @@
 package com.kirivsoft.directlink
 
+import com.kirivsoft.directlink.network.HolePunchingManager
+import com.kirivsoft.directlink.network.NatDetectionResult
+import com.kirivsoft.directlink.network.NatDetector
+import com.kirivsoft.directlink.network.NatType
+import com.kirivsoft.directlink.network.PeerEndpoint
+import com.kirivsoft.directlink.network.PunchResult
+import io.mockk.every
+import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.net.DatagramSocket
 
 class NetworkPeerTest {
     @Test
@@ -34,6 +44,43 @@ class NetworkPeerTest {
     }
 
     @Test
+    fun `connect moves to relay required when relay is configured`() = runTest {
+        val dir = createTempDir("directlink_test_")
+        val natDetector = mockk<NatDetector>()
+        val punchingManager = mockk<HolePunchingManager>()
+        every { natDetector.detect(any(), any()) } returns NatDetectionResult(
+            publicIp = "198.51.100.10",
+            publicPort = 44_000,
+            localIp = "192.168.1.10",
+            localPort = 44_000,
+            tcpPort = 44_001,
+            natType = NatType.SYMMETRIC,
+            stunServer = "test",
+            portStable = false
+        )
+        every {
+            punchingManager.punch(any<DatagramSocket>(), any(), any<PeerEndpoint>(), any())
+        } returns PunchResult.NeedsRelay("test relay path")
+        val peer = NetworkPeer(
+            config = testConfig(fileSaveDir = dir, relayUrl = "wss://relay.example/directlink"),
+            natDetector = natDetector,
+            holePunchingManager = punchingManager
+        )
+
+        peer.initialize()
+        val packet = peer.generateDlpPacket("pass", dir)
+        peer.importDlpPacket(packet, "pass")
+        peer.connect()
+
+        val phase = peer.state.value.phase
+        assertTrue(phase is PeerPhase.RelayRequired)
+        phase as PeerPhase.RelayRequired
+        assertEquals("wss://relay.example/directlink", phase.relayUrl)
+        assertTrue(phase.reason.contains("Relay is required"))
+        dir.deleteRecursively()
+    }
+
+    @Test
     fun `import rejects invalid password`() = runTest {
         val dir = createTempDir("directlink_test_")
         val peer = NetworkPeer(testConfig(fileSaveDir = dir))
@@ -47,10 +94,11 @@ class NetworkPeerTest {
         dir.deleteRecursively()
     }
 
-    private fun testConfig(fileSaveDir: File? = null) = PeerConfig(
+    private fun testConfig(fileSaveDir: File? = null, relayUrl: String? = null) = PeerConfig(
         deviceName = "Test Device",
         deviceUuid = "test-device-uuid",
         platform = "JUnit",
-        fileSaveDir = fileSaveDir
+        fileSaveDir = fileSaveDir,
+        relayUrl = relayUrl
     )
 }
