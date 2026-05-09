@@ -13,9 +13,9 @@ This repository currently contains a compact, build-oriented MVP scaffold:
 
 The DLP packet layer now has an explicit model, encrypted container format, password validation through AEAD authentication, TTL validation, peer public endpoint fields, and unit tests. The current MVP container uses PBKDF2-HMAC-SHA256 plus AES-GCM because those primitives are available from the JDK on desktop and Android. The next production hardening step is to switch the packet KDF/cipher suite to the intended Argon2id + ChaCha20-Poly1305 implementation.
 
-Networking now has a typed NAT detection contract, local IP lookup, UDP/TCP port selection, an RFC 5389-style STUN Binding Request client/parser for `MAPPED-ADDRESS` and `XOR-MAPPED-ADDRESS`, an initial UDP hole-punching flow, and a UDP tunnel session for text and chunked file frames. The peer facade stores imported DLP endpoint details, attempts a direct UDP punch, keeps the socket open after a successful punch, sends text through the tunnel session, and can frame outgoing files with SHA-256 verification on receive. File chunks are acknowledged by the receiver, missing chunks are retried before the final file frame is sent, and UDP tunnel frames are encrypted with an AES-GCM key derived from the shared DLP password. Relay fallback is still a future milestone.
+Networking now has a typed NAT detection contract, local IP lookup, UDP/TCP port selection, an RFC 5389-style STUN Binding Request client/parser for `MAPPED-ADDRESS` and `XOR-MAPPED-ADDRESS`, an initial UDP hole-punching flow, and a UDP tunnel session for text and chunked file frames. The peer facade stores imported DLP endpoint details, attempts a direct UDP punch, keeps the socket open after a successful punch, sends text through the tunnel session, and can frame outgoing files with SHA-256 verification on receive. File chunks are acknowledged by the receiver, missing chunks are retried before the final file frame is sent, and UDP tunnel frames are encrypted with an AES-GCM key derived from the shared DLP password. Outgoing file transfers can be cancelled while they are waiting for acknowledgements. Relay fallback is still a future milestone.
 
-The shared Compose UI can initialize networking, create and import `.dlp` packets, connect to a peer, send text, pick a file for sending, and show a recent activity log for generated packets, incoming text, incoming files, send failures, and connection loss. It also surfaces sending and receiving progress for recent file transfers.
+The shared Compose UI can initialize networking, create and import `.dlp` packets, connect to a peer, send text, pick a file for sending, and show a recent activity log for generated packets, incoming text, incoming files, send failures, and connection loss. It also surfaces sending and receiving progress for recent file transfers, with a control for cancelling active transfers.
 
 ## Build
 
@@ -57,5 +57,5 @@ Desktop run:
 1. Upgrade encrypted DLP packet storage to Argon2id + ChaCha20-Poly1305.
 2. Add relay fallback and stronger NAT classification around the UDP punch flow.
 3. Add end-to-end two-peer integration tests for DLP import, punch, send, receive, and file transfer.
-4. Add transfer cancel and manual retry controls to the UI.
+4. Add manual retry controls to the UI.
 5. Improve desktop and Android file picker/share integration around real device workflows.
