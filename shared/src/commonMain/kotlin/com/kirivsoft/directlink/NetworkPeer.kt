@@ -144,7 +144,7 @@ class NetworkPeer(
             )
         }.getOrElse { error ->
             socket.close()
-            _state.update { it.copy(phase = PeerPhase.Error("Connection failed: ${error.message}")) }
+            moveToRelayOrError(peerName, "Connection failed: ${error.message}")
             return@withContext
         }
 
@@ -169,11 +169,11 @@ class NetworkPeer(
             }
             is PunchResult.NeedsRelay -> {
                 socket.close()
-                _state.update { it.copy(phase = PeerPhase.Error("Relay is required for this NAT pair: ${punch.reason}")) }
+                moveToRelayOrError(peerName, "Relay is required for this NAT pair: ${punch.reason}")
             }
             is PunchResult.Failed -> {
                 socket.close()
-                _state.update { it.copy(phase = PeerPhase.Error("Connection failed: ${punch.reason}")) }
+                moveToRelayOrError(peerName, "Connection failed: ${punch.reason}")
             }
         }
     }
@@ -301,6 +301,15 @@ class NetworkPeer(
                 totalBytes = file.sizeBytes
             )
         )
+    }
+
+    private fun moveToRelayOrError(peerName: String, reason: String) {
+        val relayUrl = config.relayUrl?.takeIf { it.isNotBlank() }
+        if (relayUrl == null) {
+            _state.update { it.copy(phase = PeerPhase.Error(reason)) }
+        } else {
+            _state.update { it.copy(phase = PeerPhase.RelayRequired(peerName, relayUrl, reason)) }
+        }
     }
 
     private fun closeTunnelOnly() {
