@@ -163,6 +163,9 @@ fun DirectLinkApp(
                 ) {
                     Text("Send file")
                 }
+                Button(onClick = { peer.cancelFileTransfers() }) {
+                    Text("Cancel transfers")
+                }
             }
 
             if (sendFilePath.isNotBlank()) {
