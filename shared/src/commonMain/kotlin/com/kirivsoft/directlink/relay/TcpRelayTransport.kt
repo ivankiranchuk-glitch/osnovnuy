@@ -24,6 +24,7 @@ class TcpRelayClient(
     private val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
     private val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8))
 
+    @Synchronized
     fun send(frame: RelayFrame) {
         writer.write(RelayFrameCodec.encode(frame))
         writer.newLine()
