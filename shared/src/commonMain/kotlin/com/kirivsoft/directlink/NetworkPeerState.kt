@@ -22,6 +22,7 @@ sealed class PeerPhase {
     data class AwaitingConnection(val peerName: String) : PeerPhase()
     data class Connected(val peerName: String, val sessionId: Long, val rttMs: Long) : PeerPhase()
     data class RelayRequired(val peerName: String, val relayUrl: String?, val reason: String) : PeerPhase()
+    data class RelayConnected(val peerName: String, val relayUrl: String, val relaySessionId: String) : PeerPhase()
     data class Error(val reason: String, val recoverable: Boolean = true) : PeerPhase()
 }
 
@@ -32,7 +33,7 @@ data class NetworkPeerState(
     val sentBytes: Long = 0,
     val receivedBytes: Long = 0
 ) {
-    val isConnected: Boolean get() = phase is PeerPhase.Connected
+    val isConnected: Boolean get() = phase is PeerPhase.Connected || phase is PeerPhase.RelayConnected
 }
 
 sealed class PeerEvent {
