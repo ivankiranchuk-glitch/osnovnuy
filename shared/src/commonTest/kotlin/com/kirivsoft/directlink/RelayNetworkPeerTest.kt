@@ -87,11 +87,7 @@ class RelayNetworkPeerTest {
             val host = NetworkPeer(testConfig("Host Device", "host-device", dir))
             val guest = NetworkPeer(testConfig("Guest Device", "guest-device", dir))
 
-            host.importDlpPacket(packetFor(dir, "Guest Device", "guest-device"), "pass")
-            guest.importDlpPacket(packetFor(dir, "Host Device", "host-device"), "pass")
-            host.connectViaRelay("tcp://127.0.0.1:${server.port}", RelayHandshakeRole.Host)
-            val sessionId = (host.state.value.phase as PeerPhase.RelayConnected).relaySessionId
-            guest.connectViaRelay("tcp://127.0.0.1:${server.port}", RelayHandshakeRole.Guest, sessionId)
+            connectPeersThroughRelay(host, guest, dir, server)
 
             val incoming = async {
                 withTimeout(3_000) {
@@ -107,6 +103,50 @@ class RelayNetworkPeerTest {
             guest.close()
         }
         dir.deleteRecursively()
+    }
+
+    @Test
+    fun `relay connected peers exchange encrypted file payloads`() = runTest {
+        val root = createTempDir("directlink_relay_file_test_")
+        val hostDir = File(root, "host").apply { mkdirs() }
+        val guestDir = File(root, "guest").apply { mkdirs() }
+        TcpRelayServer(coordinator = RelayServerCoordinator { "session-1" }).use { server ->
+            server.start()
+            val host = NetworkPeer(testConfig("Host Device", "host-device", hostDir))
+            val guest = NetworkPeer(testConfig("Guest Device", "guest-device", guestDir))
+            val file = File(guestDir, "relay-file.txt").apply { writeText("relay file body") }
+
+            connectPeersThroughRelay(host, guest, root, server)
+
+            val incomingFile = async {
+                withTimeout(5_000) {
+                    host.events.filterIsInstance<PeerEvent.IncomingFile>().first()
+                }
+            }
+            guest.sendFile(file)
+
+            val received = incomingFile.await()
+            assertEquals("relay-file.txt", received.name)
+            assertEquals("relay file body", File(received.savedPath).readText())
+            assertEquals(1, guest.state.value.sentMessages)
+            assertEquals(1, host.state.value.receivedMessages)
+            host.close()
+            guest.close()
+        }
+        root.deleteRecursively()
+    }
+
+    private suspend fun connectPeersThroughRelay(
+        host: NetworkPeer,
+        guest: NetworkPeer,
+        dir: File,
+        server: TcpRelayServer
+    ) {
+        host.importDlpPacket(packetFor(dir, "Guest Device", "guest-device"), "pass")
+        guest.importDlpPacket(packetFor(dir, "Host Device", "host-device"), "pass")
+        host.connectViaRelay("tcp://127.0.0.1:${server.port}", RelayHandshakeRole.Host)
+        val sessionId = (host.state.value.phase as PeerPhase.RelayConnected).relaySessionId
+        guest.connectViaRelay("tcp://127.0.0.1:${server.port}", RelayHandshakeRole.Guest, sessionId)
     }
 
     private fun remotePacket(dir: File): File = packetFor(dir, "Remote Device", "remote-device-uuid")
