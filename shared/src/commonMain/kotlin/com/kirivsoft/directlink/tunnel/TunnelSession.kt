@@ -13,9 +13,16 @@ import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
+import java.security.SecureRandom
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import javax.crypto.AEADBadTagException
+import javax.crypto.Cipher
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 
 class UdpTunnelSession(
     private val socket: DatagramSocket,
@@ -26,6 +33,7 @@ class UdpTunnelSession(
     private val onFileChunk: (FileChunk) -> Unit = {},
     private val onFileEnd: (FileEnd) -> Unit = {},
     private val onFileAck: (FileAck) -> Unit = {},
+    private val cipher: TunnelCipher? = null,
     private val onClosed: (String) -> Unit
 ) {
     private val nextMessageId = AtomicLong(1)
@@ -42,7 +50,8 @@ class UdpTunnelSession(
                 try {
                     socket.receive(packet)
                     val bytes = buffer.copyOf(packet.length)
-                    when (val frame = TunnelFrameCodec.decode(bytes)) {
+                    val frameBytes = cipher?.decrypt(bytes) ?: bytes
+                    when (val frame = TunnelFrameCodec.decode(frameBytes)) {
                         is TunnelFrame.Text -> onText(frame.text, frame.messageId)
                         is TunnelFrame.FileStartFrame -> onFileStart(frame.file)
                         is TunnelFrame.FileChunkFrame -> {
@@ -137,7 +146,8 @@ class UdpTunnelSession(
     }
 
     private fun sendFrame(payload: ByteArray) {
-        socket.send(DatagramPacket(payload, payload.size, remoteAddress.address, remoteAddress.port))
+        val bytes = cipher?.encrypt(payload) ?: payload
+        socket.send(DatagramPacket(bytes, bytes.size, remoteAddress.address, remoteAddress.port))
     }
 
     companion object {
@@ -148,6 +158,56 @@ class UdpTunnelSession(
         private const val FILE_ACK_TIMEOUT_MS = 700L
         private const val FILE_ACK_POLL_MS = 20L
         private const val FILE_CHUNK_RETRIES = 3
+    }
+}
+
+class TunnelCipher private constructor(
+    private val key: SecretKeySpec,
+    private val random: SecureRandom = SecureRandom()
+) {
+    fun encrypt(plaintext: ByteArray): ByteArray {
+        val nonce = ByteArray(NONCE_SIZE).also(random::nextBytes)
+        val ciphertext = Cipher.getInstance(CIPHER).run {
+            init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(TAG_BITS, nonce))
+            doFinal(plaintext)
+        }
+        return MAGIC + nonce + ciphertext
+    }
+
+    fun decrypt(container: ByteArray): ByteArray? {
+        if (container.size < MAGIC.size + NONCE_SIZE + 1) return null
+        if (!container.copyOfRange(0, MAGIC.size).contentEquals(MAGIC)) return null
+        val nonceStart = MAGIC.size
+        val ciphertextStart = nonceStart + NONCE_SIZE
+        val nonce = container.copyOfRange(nonceStart, ciphertextStart)
+        val ciphertext = container.copyOfRange(ciphertextStart, container.size)
+        return try {
+            Cipher.getInstance(CIPHER).run {
+                init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, nonce))
+                doFinal(ciphertext)
+            }
+        } catch (_: AEADBadTagException) {
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    companion object {
+        private val MAGIC = byteArrayOf('D'.code.toByte(), 'L'.code.toByte(), 'E'.code.toByte(), '1'.code.toByte())
+        private val SALT = "DirectLink UDP tunnel v1".toByteArray(Charsets.UTF_8)
+        private const val CIPHER = "AES/GCM/NoPadding"
+        private const val KDF = "PBKDF2WithHmacSHA256"
+        private const val NONCE_SIZE = 12
+        private const val KEY_BITS = 256
+        private const val TAG_BITS = 128
+        private const val ITERATIONS = 120_000
+
+        fun fromPassword(password: String): TunnelCipher {
+            val spec = PBEKeySpec(password.toCharArray(), SALT, ITERATIONS, KEY_BITS)
+            val keyBytes = SecretKeyFactory.getInstance(KDF).generateSecret(spec).encoded
+            return TunnelCipher(SecretKeySpec(keyBytes, "AES"))
+        }
     }
 }
 
