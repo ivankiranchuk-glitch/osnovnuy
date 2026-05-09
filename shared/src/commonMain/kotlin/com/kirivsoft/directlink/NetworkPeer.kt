@@ -7,6 +7,7 @@ import com.kirivsoft.directlink.network.PeerEndpoint
 import com.kirivsoft.directlink.network.PunchResult
 import com.kirivsoft.directlink.packet.DlpParseResult
 import com.kirivsoft.directlink.packet.DlpSerializer
+import com.kirivsoft.directlink.tunnel.UdpTunnelSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -43,6 +44,7 @@ class NetworkPeer(
     private var natResult: NatDetectionResult? = null
     private var importedPeerName: String? = null
     private var remoteEndpoint: PeerEndpoint? = null
+    private var tunnelSession: UdpTunnelSession? = null
     private val fingerprint = UUID.nameUUIDFromBytes(config.deviceUuid.toByteArray()).toString().take(8)
 
     suspend fun initialize() = withContext(Dispatchers.IO) {
@@ -112,36 +114,58 @@ class NetworkPeer(
             return@withContext
         }
 
+        closeTunnelOnly()
         if (isSelfEndpoint(endpoint, nat)) {
             _state.update { it.copy(phase = PeerPhase.Connected(peerName, System.currentTimeMillis(), 0)) }
             return@withContext
         }
 
+        val socket = DatagramSocket(null).apply {
+            reuseAddress = true
+            bind(InetSocketAddress(nat.localPort))
+        }
         val punch = runCatching {
-            DatagramSocket(null).use { socket ->
-                socket.reuseAddress = true
-                socket.bind(InetSocketAddress(nat.localPort))
-                holePunchingManager.punch(
-                    localSocket = socket,
-                    localNatType = nat.natType,
-                    remote = endpoint,
-                    timeoutMs = timeoutMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-                )
-            }
+            holePunchingManager.punch(
+                localSocket = socket,
+                localNatType = nat.natType,
+                remote = endpoint,
+                timeoutMs = timeoutMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            )
         }.getOrElse { error ->
+            socket.close()
             _state.update { it.copy(phase = PeerPhase.Error("Connection failed: ${error.message}")) }
             return@withContext
         }
 
         when (punch) {
-            is PunchResult.Success -> _state.update {
-                it.copy(phase = PeerPhase.Connected(peerName, System.currentTimeMillis(), punch.rttMs))
+            is PunchResult.Success -> {
+                tunnelSession = UdpTunnelSession(
+                    socket = socket,
+                    remoteAddress = punch.remoteAddress,
+                    scope = scope,
+                    onText = { text, messageId ->
+                        _state.update {
+                            it.copy(
+                                receivedMessages = it.receivedMessages + 1,
+                                receivedBytes = it.receivedBytes + text.toByteArray().size
+                            )
+                        }
+                        _events.tryEmit(PeerEvent.IncomingText(text, messageId))
+                    },
+                    onClosed = { reason ->
+                        _state.update { it.copy(phase = PeerPhase.Error(reason)) }
+                        _events.tryEmit(PeerEvent.ConnectionLost(reason))
+                    }
+                ).also { it.start() }
+                _state.update { it.copy(phase = PeerPhase.Connected(peerName, System.currentTimeMillis(), punch.rttMs)) }
             }
-            is PunchResult.NeedsRelay -> _state.update {
-                it.copy(phase = PeerPhase.Error("Relay is required for this NAT pair: ${punch.reason}"))
+            is PunchResult.NeedsRelay -> {
+                socket.close()
+                _state.update { it.copy(phase = PeerPhase.Error("Relay is required for this NAT pair: ${punch.reason}")) }
             }
-            is PunchResult.Failed -> _state.update {
-                it.copy(phase = PeerPhase.Error("Connection failed: ${punch.reason}"))
+            is PunchResult.Failed -> {
+                socket.close()
+                _state.update { it.copy(phase = PeerPhase.Error("Connection failed: ${punch.reason}")) }
             }
         }
     }
@@ -151,9 +175,16 @@ class NetworkPeer(
             _events.emit(PeerEvent.SendFailed("Session is not connected"))
             return
         }
-        _state.update {
-            it.copy(sentMessages = it.sentMessages + 1, sentBytes = it.sentBytes + text.toByteArray().size)
+        val bytes = text.toByteArray().size
+        val sent = runCatching { tunnelSession?.sendText(text) }.getOrElse { error ->
+            _events.emit(PeerEvent.SendFailed(error.message ?: "Text send failed"))
+            return
         }
+        if (sent == null && tunnelSession != null) {
+            _events.emit(PeerEvent.SendFailed("UDP tunnel is not ready"))
+            return
+        }
+        _state.update { it.copy(sentMessages = it.sentMessages + 1, sentBytes = it.sentBytes + bytes) }
     }
 
     suspend fun sendFile(file: File) {
@@ -166,10 +197,16 @@ class NetworkPeer(
     }
 
     fun close() {
+        closeTunnelOnly()
         natResult = null
         importedPeerName = null
         remoteEndpoint = null
         _state.update { it.copy(phase = PeerPhase.Idle) }
+    }
+
+    private fun closeTunnelOnly() {
+        tunnelSession?.close()
+        tunnelSession = null
     }
 
     private fun detectNat(): NatDetectionResult = natResult ?: natDetector
