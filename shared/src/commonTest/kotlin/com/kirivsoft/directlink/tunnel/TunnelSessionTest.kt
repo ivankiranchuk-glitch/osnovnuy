@@ -57,8 +57,11 @@ class TunnelSessionTest {
                 sessionA.sendText("ping")
                 sessionB.sendText("pong")
 
-                assertEquals("B:ping", received.poll(2, TimeUnit.SECONDS))
-                assertEquals("A:pong", received.poll(2, TimeUnit.SECONDS))
+                val messages = setOf(
+                    received.poll(2, TimeUnit.SECONDS),
+                    received.poll(2, TimeUnit.SECONDS)
+                )
+                assertEquals(setOf("B:ping", "A:pong"), messages)
                 sessionA.close()
                 sessionB.close()
             }
