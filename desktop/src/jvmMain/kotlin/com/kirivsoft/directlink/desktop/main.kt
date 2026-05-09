@@ -5,7 +5,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
-import androidx.compose.ui.window.exitApplication
 import androidx.compose.ui.window.rememberWindowState
 import com.kirivsoft.directlink.ui.DirectLinkApp
 import com.kirivsoft.directlink.ui.theme.DirectLinkTheme
