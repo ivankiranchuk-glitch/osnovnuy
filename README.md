@@ -6,14 +6,14 @@ Encrypted peer-to-peer tunnel MVP built with Kotlin, Compose Multiplatform, and 
 
 This repository currently contains a compact, build-oriented MVP scaffold:
 
-- `shared`: Kotlin Multiplatform shared model, peer facade, encrypted MVP DLP packet serializer, STUN/NAT detector, UDP hole-punching manager, and Compose UI.
+- `shared`: Kotlin Multiplatform shared model, peer facade, encrypted MVP DLP packet serializer, STUN/NAT detector, UDP hole-punching manager, UDP text tunnel session, and Compose UI.
 - `desktop`: Compose Desktop application entrypoint.
 - `android`: Android application entrypoint and manifest.
 - GitHub Actions CI runs Gradle project checks, shared desktop tests, desktop compilation, and Android debug APK assembly through the Gradle Wrapper.
 
 The DLP packet layer now has an explicit model, encrypted container format, password validation through AEAD authentication, TTL validation, peer public endpoint fields, and unit tests. The current MVP container uses PBKDF2-HMAC-SHA256 plus AES-GCM because those primitives are available from the JDK on desktop and Android. The next production hardening step is to switch the packet KDF/cipher suite to the intended Argon2id + ChaCha20-Poly1305 implementation.
 
-Networking now has a typed NAT detection contract, local IP lookup, UDP/TCP port selection, an RFC 5389-style STUN Binding Request client/parser for `MAPPED-ADDRESS` and `XOR-MAPPED-ADDRESS`, and an initial UDP hole-punching flow. The peer facade stores imported DLP endpoint details and attempts a direct UDP punch before marking a session connected. Relay fallback is still a future milestone for strict symmetric NAT cases.
+Networking now has a typed NAT detection contract, local IP lookup, UDP/TCP port selection, an RFC 5389-style STUN Binding Request client/parser for `MAPPED-ADDRESS` and `XOR-MAPPED-ADDRESS`, an initial UDP hole-punching flow, and a small UDP tunnel session for text frames. The peer facade stores imported DLP endpoint details, attempts a direct UDP punch, keeps the socket open after a successful punch, and sends text through the tunnel session. Relay fallback and file transfer framing are still future milestones.
 
 ## Build
 
@@ -52,7 +52,7 @@ Desktop run:
 
 ## Next Milestones
 
-1. Upgrade encrypted DLP packet storage to Argon2id + ChaCha20-Poly1305.
-2. Add relay fallback and stronger NAT classification around the UDP punch flow.
-3. Add encrypted tunnel session tests around packet generation/import and tunnel behavior.
-4. Build a real connected transfer loop on top of the current peer facade.
+1. Add encrypted file transfer framing on top of the UDP tunnel session.
+2. Upgrade encrypted DLP packet storage to Argon2id + ChaCha20-Poly1305.
+3. Add relay fallback and stronger NAT classification around the UDP punch flow.
+4. Add end-to-end two-peer integration tests for DLP import, punch, send, and receive.
