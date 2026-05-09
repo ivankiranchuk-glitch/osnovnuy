@@ -6,6 +6,7 @@ import com.kirivsoft.directlink.network.NatDetector
 import com.kirivsoft.directlink.network.NatType
 import com.kirivsoft.directlink.network.PeerEndpoint
 import com.kirivsoft.directlink.network.PunchResult
+import com.kirivsoft.directlink.packet.DlpSerializer
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.test.runTest
@@ -66,9 +67,8 @@ class NetworkPeerTest {
             natDetector = natDetector,
             holePunchingManager = punchingManager
         )
+        val packet = remotePacket(dir)
 
-        peer.initialize()
-        val packet = peer.generateDlpPacket("pass", dir)
         peer.importDlpPacket(packet, "pass")
         peer.connect()
 
@@ -92,6 +92,25 @@ class NetworkPeerTest {
         assertNull(imported)
         assertTrue(peer.state.value.phase is PeerPhase.Error)
         dir.deleteRecursively()
+    }
+
+    private fun remotePacket(dir: File): File {
+        val serializer = DlpSerializer()
+        val file = File(dir, "remote.dlp")
+        val packet = serializer.buildPacket(
+            deviceName = "Remote Device",
+            deviceUuid = "remote-device-uuid",
+            platform = "JUnit",
+            appVersion = "0.1.0",
+            fingerprint = "remote01",
+            publicIp = "203.0.113.20",
+            publicPort = 45_000,
+            natType = NatType.SYMMETRIC,
+            password = "pass",
+            ttlSeconds = 60
+        )
+        serializer.write(packet, "pass", file)
+        return file
     }
 
     private fun testConfig(fileSaveDir: File? = null, relayUrl: String? = null) = PeerConfig(
