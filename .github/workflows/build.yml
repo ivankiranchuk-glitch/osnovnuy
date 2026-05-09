@@ -21,17 +21,15 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.7'
 
       - name: Check project model
-        run: gradle projects
+        run: ./gradlew projects
 
       - name: Run shared desktop tests
-        run: gradle :shared:desktopTest
+        run: ./gradlew :shared:desktopTest
 
       - name: Build desktop classes
-        run: gradle :desktop:compileKotlinJvm
+        run: ./gradlew :desktop:compileKotlinJvm
 
       - name: Build Android debug APK
-        run: gradle :android:assembleDebug
+        run: ./gradlew :android:assembleDebug
