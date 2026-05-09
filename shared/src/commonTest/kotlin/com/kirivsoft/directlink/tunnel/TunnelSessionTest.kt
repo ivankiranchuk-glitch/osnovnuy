@@ -6,6 +6,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -51,6 +52,21 @@ class TunnelSessionTest {
     }
 
     @Test
+    fun `tunnel cipher encrypts and decrypts frames`() {
+        val sender = TunnelCipher.fromPassword("shared-password")
+        val receiver = TunnelCipher.fromPassword("shared-password")
+        val wrongReceiver = TunnelCipher.fromPassword("wrong-password")
+        val plaintext = TunnelFrameCodec.encodeText(99, "secret")
+
+        val encrypted = sender.encrypt(plaintext)
+        val decrypted = receiver.decrypt(encrypted)
+
+        assertNotEquals(plaintext.toList(), encrypted.toList())
+        assertArrayEquals(plaintext, decrypted)
+        assertNull(wrongReceiver.decrypt(encrypted))
+    }
+
+    @Test
     fun `codec ignores malformed frame`() {
         assertNull(TunnelFrameCodec.decode(byteArrayOf(1, 2, 3)))
     }
@@ -74,6 +90,47 @@ class TunnelSessionTest {
                     remoteAddress = InetSocketAddress("127.0.0.1", socketA.localPort),
                     scope = scope,
                     onText = { text, _ -> received.offer("B:$text") },
+                    onClosed = {}
+                )
+
+                sessionA.start()
+                sessionB.start()
+                sessionA.sendText("ping")
+                sessionB.sendText("pong")
+
+                val messages = setOf(
+                    received.poll(2, TimeUnit.SECONDS),
+                    received.poll(2, TimeUnit.SECONDS)
+                )
+                assertEquals(setOf("B:ping", "A:pong"), messages)
+                sessionA.close()
+                sessionB.close()
+            }
+        }
+        scope.cancel()
+    }
+
+    @Test
+    fun `UDP tunnel session sends and receives encrypted text`() {
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        val received = LinkedBlockingQueue<String>()
+
+        DatagramSocket(0).use { socketA ->
+            DatagramSocket(0).use { socketB ->
+                val sessionA = UdpTunnelSession(
+                    socket = socketA,
+                    remoteAddress = InetSocketAddress("127.0.0.1", socketB.localPort),
+                    scope = scope,
+                    onText = { text, _ -> received.offer("A:$text") },
+                    cipher = TunnelCipher.fromPassword("shared-password"),
+                    onClosed = {}
+                )
+                val sessionB = UdpTunnelSession(
+                    socket = socketB,
+                    remoteAddress = InetSocketAddress("127.0.0.1", socketA.localPort),
+                    scope = scope,
+                    onText = { text, _ -> received.offer("B:$text") },
+                    cipher = TunnelCipher.fromPassword("shared-password"),
                     onClosed = {}
                 )
 
