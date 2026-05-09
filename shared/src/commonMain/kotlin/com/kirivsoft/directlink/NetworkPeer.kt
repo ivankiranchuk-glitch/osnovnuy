@@ -10,6 +10,7 @@ import com.kirivsoft.directlink.packet.DlpSerializer
 import com.kirivsoft.directlink.tunnel.FileChunk
 import com.kirivsoft.directlink.tunnel.FileEnd
 import com.kirivsoft.directlink.tunnel.FileStart
+import com.kirivsoft.directlink.tunnel.FileTransferProgress
 import com.kirivsoft.directlink.tunnel.TunnelCipher
 import com.kirivsoft.directlink.tunnel.UdpTunnelSession
 import com.kirivsoft.directlink.tunnel.sha256
@@ -157,6 +158,7 @@ class NetworkPeer(
                     onFileStart = ::handleFileStart,
                     onFileChunk = ::handleFileChunk,
                     onFileEnd = ::handleFileEnd,
+                    onFileSendProgress = ::handleFileSendProgress,
                     cipher = tunnelPassword?.let(TunnelCipher::fromPassword),
                     onClosed = { reason ->
                         _state.update { it.copy(phase = PeerPhase.Error(reason)) }
@@ -235,10 +237,13 @@ class NetworkPeer(
 
     private fun handleFileStart(file: FileStart) {
         incomingFiles[file.transferId] = IncomingFileAssembly(file)
+        emitReceiveProgress(file, 0L)
     }
 
     private fun handleFileChunk(chunk: FileChunk) {
-        incomingFiles[chunk.transferId]?.chunks?.put(chunk.index, chunk.bytes)
+        val assembly = incomingFiles[chunk.transferId] ?: return
+        assembly.chunks[chunk.index] = chunk.bytes
+        emitReceiveProgress(assembly.start, assembly.receivedBytes())
     }
 
     private fun handleFileEnd(end: FileEnd) {
@@ -265,7 +270,30 @@ class NetworkPeer(
                 receivedBytes = it.receivedBytes + bytes.size
             )
         }
+        emitReceiveProgress(assembly.start.copy(name = safeName), bytes.size.toLong())
         _events.tryEmit(PeerEvent.IncomingFile(safeName, bytes.size.toLong(), output.absolutePath, actualSha256))
+    }
+
+    private fun handleFileSendProgress(progress: FileTransferProgress) {
+        _events.tryEmit(
+            PeerEvent.FileTransferProgress(
+                direction = FileTransferDirection.Sending,
+                name = progress.name,
+                completedBytes = progress.completedBytes,
+                totalBytes = progress.totalBytes
+            )
+        )
+    }
+
+    private fun emitReceiveProgress(file: FileStart, completedBytes: Long) {
+        _events.tryEmit(
+            PeerEvent.FileTransferProgress(
+                direction = FileTransferDirection.Receiving,
+                name = file.name.safeFileName(),
+                completedBytes = completedBytes.coerceAtMost(file.sizeBytes),
+                totalBytes = file.sizeBytes
+            )
+        )
     }
 
     private fun closeTunnelOnly() {
@@ -291,7 +319,9 @@ class NetworkPeer(
     private data class IncomingFileAssembly(
         val start: FileStart,
         val chunks: MutableMap<Int, ByteArray> = ConcurrentHashMap()
-    )
+    ) {
+        fun receivedBytes(): Long = chunks.values.sumOf { it.size.toLong() }
+    }
 }
 
 private fun File.uniqueSibling(): File {
