@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -30,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.kirivsoft.directlink.FileTransferDirection
 import com.kirivsoft.directlink.NetworkPeer
 import com.kirivsoft.directlink.PeerEvent
 import com.kirivsoft.directlink.PeerPhase
@@ -45,6 +47,7 @@ fun DirectLinkApp(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val activity = remember { mutableStateListOf<ActivityItem>() }
+    val transfers = remember { mutableStateListOf<TransferItem>() }
     var password by remember { mutableStateOf("") }
     var importPath by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
@@ -66,6 +69,18 @@ fun DirectLinkApp(
                         detail = "${event.name} (${event.sizeBytes} bytes)\n${event.savedPath}"
                     )
                 )
+                is PeerEvent.FileTransferProgress -> {
+                    transfers.upsert(
+                        TransferItem(
+                            direction = event.direction,
+                            name = event.name,
+                            completedBytes = event.completedBytes,
+                            totalBytes = event.totalBytes,
+                            percent = event.percent,
+                            complete = event.isComplete
+                        )
+                    )
+                }
                 is PeerEvent.SendFailed -> {
                     activity.prepend(ActivityItem("Send failed", event.reason))
                     snackbarHostState.showSnackbar(event.reason)
@@ -164,6 +179,27 @@ fun DirectLinkApp(
                 }
             }
 
+            if (transfers.isNotEmpty()) {
+                Text("Transfers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    transfers.take(4).forEach { transfer ->
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("${transfer.direction.label()}: ${transfer.name}", fontWeight = FontWeight.SemiBold)
+                                LinearProgressIndicator(
+                                    progress = transfer.percent / 100f,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                                Text(
+                                    "${transfer.percent}% - ${transfer.completedBytes}/${transfer.totalBytes} bytes${if (transfer.complete) " - complete" else ""}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             Text("Activity", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             LazyColumn(
                 modifier = Modifier.fillMaxWidth().weight(1f),
@@ -187,9 +223,33 @@ private data class ActivityItem(
     val detail: String
 )
 
+private data class TransferItem(
+    val direction: FileTransferDirection,
+    val name: String,
+    val completedBytes: Long,
+    val totalBytes: Long,
+    val percent: Int,
+    val complete: Boolean
+)
+
 private fun MutableList<ActivityItem>.prepend(item: ActivityItem) {
     add(0, item)
     if (size > 30) removeAt(lastIndex)
+}
+
+private fun MutableList<TransferItem>.upsert(item: TransferItem) {
+    val index = indexOfFirst { it.direction == item.direction && it.name == item.name }
+    if (index >= 0) {
+        this[index] = item
+    } else {
+        add(0, item)
+    }
+    while (size > 8) removeAt(lastIndex)
+}
+
+private fun FileTransferDirection.label(): String = when (this) {
+    FileTransferDirection.Sending -> "Sending"
+    FileTransferDirection.Receiving -> "Receiving"
 }
 
 private fun phaseText(phase: PeerPhase): String = when (phase) {
