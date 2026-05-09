@@ -215,6 +215,13 @@ class NetworkPeer(
         _state.update { it.copy(sentMessages = it.sentMessages + 1, sentBytes = it.sentBytes + bytes.size) }
     }
 
+    fun cancelFileTransfers() {
+        val cancelled = tunnelSession?.cancelFileTransfers() ?: false
+        if (!cancelled) {
+            _events.tryEmit(PeerEvent.SendFailed("No active file transfer"))
+        }
+    }
+
     fun close() {
         closeTunnelOnly()
         natResult = null
