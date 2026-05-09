@@ -241,7 +241,7 @@ fun DirectLinkApp(
                             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text("${transfer.direction.label()}: ${transfer.name}", fontWeight = FontWeight.SemiBold)
                                 LinearProgressIndicator(
-                                    progress = transfer.percent / 100f,
+                                    progress = { transfer.percent / 100f },
                                     modifier = Modifier.fillMaxWidth()
                                 )
                                 Text(
