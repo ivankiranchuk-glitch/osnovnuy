@@ -35,6 +35,7 @@ import com.kirivsoft.directlink.FileTransferDirection
 import com.kirivsoft.directlink.NetworkPeer
 import com.kirivsoft.directlink.PeerEvent
 import com.kirivsoft.directlink.PeerPhase
+import com.kirivsoft.directlink.relay.RelayHandshakeRole
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -50,6 +51,8 @@ fun DirectLinkApp(
     val transfers = remember { mutableStateListOf<TransferItem>() }
     var password by remember { mutableStateOf("") }
     var importPath by remember { mutableStateOf("") }
+    var relayUrl by remember { mutableStateOf("tcp://127.0.0.1:47777") }
+    var relaySessionId by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
     var sendFilePath by remember { mutableStateOf("") }
     val state by peer.state.collectAsState()
@@ -102,12 +105,22 @@ fun DirectLinkApp(
             Text(phaseText(state.phase), style = MaterialTheme.typography.bodyMedium)
 
             val relayPhase = state.phase as? PeerPhase.RelayRequired
+            val relayConnected = state.phase as? PeerPhase.RelayConnected
             if (relayPhase != null) {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text("Relay required", fontWeight = FontWeight.SemiBold)
                         Text(relayPhase.reason, style = MaterialTheme.typography.bodySmall)
                         Text("Relay: ${relayPhase.relayUrl ?: "not configured"}", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            if (relayConnected != null) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Relay connected", fontWeight = FontWeight.SemiBold)
+                        Text("Relay: ${relayConnected.relayUrl}", style = MaterialTheme.typography.bodySmall)
+                        Text("Session: ${relayConnected.relaySessionId}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -144,6 +157,33 @@ fun DirectLinkApp(
                 }
                 Button(onClick = { scope.launch { peer.connect() } }) {
                     Text("Connect")
+                }
+            }
+
+            OutlinedTextField(
+                value = relayUrl,
+                onValueChange = { relayUrl = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Relay URL") }
+            )
+            OutlinedTextField(
+                value = relaySessionId,
+                onValueChange = { relaySessionId = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Relay session") }
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = { scope.launch { peer.connectViaRelay(relayUrl, RelayHandshakeRole.Host) } }) {
+                    Text("Host relay")
+                }
+                Button(
+                    onClick = {
+                        scope.launch {
+                            peer.connectViaRelay(relayUrl, RelayHandshakeRole.Guest, relaySessionId.ifBlank { null })
+                        }
+                    }
+                ) {
+                    Text("Join relay")
                 }
             }
 
@@ -274,5 +314,6 @@ private fun phaseText(phase: PeerPhase): String = when (phase) {
     is PeerPhase.AwaitingConnection -> "Awaiting connection with ${phase.peerName}"
     is PeerPhase.Connected -> "Connected to ${phase.peerName}"
     is PeerPhase.RelayRequired -> "Relay required for ${phase.peerName}"
+    is PeerPhase.RelayConnected -> "Relay connected to ${phase.peerName}"
     is PeerPhase.Error -> "Error: ${phase.reason}"
 }
