@@ -28,6 +28,13 @@ gradle :desktop:compileKotlinJvm
 gradle :android:assembleDebug
 ```
 
+For a local Windows Android build, install Android Studio and let the first-run wizard install the SDK. Then create `local.properties` in the repository root:
+
+```powershell
+Set-Content local.properties "sdk.dir=$($env:LOCALAPPDATA.Replace('\','/'))/Android/Sdk"
+gradle :android:assembleDebug
+```
+
 Desktop run:
 
 ```bash
