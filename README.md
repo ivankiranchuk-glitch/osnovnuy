@@ -15,9 +15,9 @@ The DLP packet layer now has an explicit model, encrypted container format, pass
 
 Networking now has a typed NAT detection contract, local IP lookup, UDP/TCP port selection, an RFC 5389-style STUN Binding Request client/parser for `MAPPED-ADDRESS` and `XOR-MAPPED-ADDRESS`, an initial UDP hole-punching flow, and a UDP tunnel session for text and chunked file frames. The peer facade stores imported DLP endpoint details, attempts a direct UDP punch, keeps the socket open after a successful punch, sends text through the tunnel session, and can frame outgoing files with SHA-256 verification on receive. File chunks are acknowledged by the receiver, missing chunks are retried before the final file frame is sent, and UDP tunnel frames are encrypted with an AES-GCM key derived from the shared DLP password. Outgoing file transfers can be cancelled while they are waiting for acknowledgements.
 
-When direct punching fails and `relayUrl` is configured, the peer moves into an explicit `RelayRequired` phase instead of a generic error. The shared relay module defines JSON relay frames, client handshake state, a minimal in-memory relay coordinator, and a TCP line-delimited JSON relay transport for local register, join, payload routing, close, and error tests. The desktop module can run this relay transport as a standalone local server process.
+When direct punching fails and `relayUrl` is configured, the peer moves into an explicit `RelayRequired` phase instead of a generic error. The shared relay module defines JSON relay frames, client handshake state, a minimal in-memory relay coordinator, and a TCP line-delimited JSON relay transport for local register, join, payload routing, close, and error tests. The desktop module can run this relay transport as a standalone local server process, and the shared peer facade can connect to that server as either the relay host or relay guest.
 
-The shared Compose UI can initialize networking, create and import `.dlp` packets, connect to a peer, send text, pick a file for sending, and show a recent activity log for generated packets, incoming text, incoming files, send failures, and connection loss. It also surfaces sending and receiving progress for recent file transfers, with a control for cancelling active transfers. Relay-required connection attempts are shown as a dedicated state with the configured relay URL.
+The shared Compose UI can initialize networking, create and import `.dlp` packets, connect to a peer, send text, pick a file for sending, and show a recent activity log for generated packets, incoming text, incoming files, send failures, and connection loss. It also surfaces sending and receiving progress for recent file transfers, with a control for cancelling active transfers. Relay-required connection attempts are shown as a dedicated state with the configured relay URL. The UI also includes relay URL/session fields plus Host relay and Join relay actions for opening a TCP relay session. Relay payload sending is still the next step, so a relay connection can be established before messages and files are routed through it.
 
 ## Build
 
@@ -61,9 +61,31 @@ Relay server run:
 .\gradlew.bat :desktop:runRelayServer -PrelayPort=48888
 ```
 
+## Local Relay Workflow
+
+Use the relay server when direct UDP punching fails or when you want to test the fallback path locally.
+
+1. Start the relay server in one terminal and leave it running:
+
+```powershell
+.\gradlew.bat :desktop:runRelayServer
+```
+
+2. Start the desktop app in another terminal:
+
+```powershell
+.\gradlew.bat :desktop:run
+```
+
+3. In the app, use `tcp://127.0.0.1:47777` as the relay URL.
+4. On the first device/session, click Host relay and copy the displayed relay session id.
+5. On the second device/session, paste that session id and click Join relay.
+
+At the moment this verifies relay registration and joining. Routing text and file payloads through the connected relay session is the next implementation step.
+
 ## Next Milestones
 
-1. Wire the relay transport into `NetworkPeer` after the `RelayRequired` phase.
+1. Route text and file tunnel payloads through an established relay connection.
 2. Upgrade encrypted DLP packet storage to Argon2id + ChaCha20-Poly1305.
 3. Add stronger NAT classification around the UDP punch flow.
 4. Add end-to-end two-peer integration tests for DLP import, punch, send, receive, relay-required, relay transport, and file transfer.
