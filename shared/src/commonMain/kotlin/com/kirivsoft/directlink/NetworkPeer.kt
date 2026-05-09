@@ -7,6 +7,9 @@ import com.kirivsoft.directlink.network.PeerEndpoint
 import com.kirivsoft.directlink.network.PunchResult
 import com.kirivsoft.directlink.packet.DlpParseResult
 import com.kirivsoft.directlink.packet.DlpSerializer
+import com.kirivsoft.directlink.tunnel.FileChunk
+import com.kirivsoft.directlink.tunnel.FileEnd
+import com.kirivsoft.directlink.tunnel.FileStart
 import com.kirivsoft.directlink.tunnel.UdpTunnelSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +27,7 @@ import java.io.File
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 class NetworkPeer(
     private val config: PeerConfig,
@@ -45,6 +49,7 @@ class NetworkPeer(
     private var importedPeerName: String? = null
     private var remoteEndpoint: PeerEndpoint? = null
     private var tunnelSession: UdpTunnelSession? = null
+    private val incomingFiles = ConcurrentHashMap<Long, IncomingFileAssembly>()
     private val fingerprint = UUID.nameUUIDFromBytes(config.deviceUuid.toByteArray()).toString().take(8)
 
     suspend fun initialize() = withContext(Dispatchers.IO) {
@@ -143,15 +148,10 @@ class NetworkPeer(
                     socket = socket,
                     remoteAddress = punch.remoteAddress,
                     scope = scope,
-                    onText = { text, messageId ->
-                        _state.update {
-                            it.copy(
-                                receivedMessages = it.receivedMessages + 1,
-                                receivedBytes = it.receivedBytes + text.toByteArray().size
-                            )
-                        }
-                        _events.tryEmit(PeerEvent.IncomingText(text, messageId))
-                    },
+                    onText = ::handleIncomingText,
+                    onFileStart = ::handleFileStart,
+                    onFileChunk = ::handleFileChunk,
+                    onFileEnd = ::handleFileEnd,
                     onClosed = { reason ->
                         _state.update { it.copy(phase = PeerPhase.Error(reason)) }
                         _events.tryEmit(PeerEvent.ConnectionLost(reason))
@@ -192,7 +192,18 @@ class NetworkPeer(
             _events.emit(PeerEvent.SendFailed("Session is not connected"))
             return
         }
-        val bytes = file.readBytes()
+        val bytes = runCatching { file.readBytes() }.getOrElse { error ->
+            _events.emit(PeerEvent.SendFailed(error.message ?: "Cannot read file"))
+            return
+        }
+        val sent = runCatching { tunnelSession?.sendFile(file.name, bytes) }.getOrElse { error ->
+            _events.emit(PeerEvent.SendFailed(error.message ?: "File send failed"))
+            return
+        }
+        if (sent == null && tunnelSession != null) {
+            _events.emit(PeerEvent.SendFailed("UDP tunnel is not ready"))
+            return
+        }
         _state.update { it.copy(sentMessages = it.sentMessages + 1, sentBytes = it.sentBytes + bytes.size) }
     }
 
@@ -201,7 +212,51 @@ class NetworkPeer(
         natResult = null
         importedPeerName = null
         remoteEndpoint = null
+        incomingFiles.clear()
         _state.update { it.copy(phase = PeerPhase.Idle) }
+    }
+
+    private fun handleIncomingText(text: String, messageId: Long) {
+        _state.update {
+            it.copy(
+                receivedMessages = it.receivedMessages + 1,
+                receivedBytes = it.receivedBytes + text.toByteArray().size
+            )
+        }
+        _events.tryEmit(PeerEvent.IncomingText(text, messageId))
+    }
+
+    private fun handleFileStart(file: FileStart) {
+        incomingFiles[file.transferId] = IncomingFileAssembly(file)
+    }
+
+    private fun handleFileChunk(chunk: FileChunk) {
+        incomingFiles[chunk.transferId]?.chunks?.put(chunk.index, chunk.bytes)
+    }
+
+    private fun handleFileEnd(end: FileEnd) {
+        val assembly = incomingFiles.remove(end.transferId) ?: return
+        val orderedChunks = (0 until end.chunks).mapNotNull { assembly.chunks[it] }
+        if (orderedChunks.size != end.chunks) {
+            _events.tryEmit(PeerEvent.ConnectionLost("File transfer ended with missing chunks"))
+            return
+        }
+        val bytes = orderedChunks.fold(ByteArray(0)) { acc, chunk -> acc + chunk }
+        if (!bytes.contentEquals(bytes.copyOf(bytes.size)) || !end.sha256.contentEquals(com.kirivsoft.directlink.tunnel.sha256(bytes))) {
+            _events.tryEmit(PeerEvent.ConnectionLost("File checksum mismatch"))
+            return
+        }
+        val dir = config.fileSaveDir ?: createTempDir("directlink_files_")
+        dir.mkdirs()
+        val output = File(dir, assembly.start.name).uniqueSibling()
+        output.writeBytes(bytes)
+        _state.update {
+            it.copy(
+                receivedMessages = it.receivedMessages + 1,
+                receivedBytes = it.receivedBytes + bytes.size
+            )
+        }
+        _events.tryEmit(PeerEvent.IncomingFile(assembly.start.name, bytes.size.toLong(), output.absolutePath, end.sha256))
     }
 
     private fun closeTunnelOnly() {
@@ -222,5 +277,22 @@ class NetworkPeer(
     private fun failImport(reason: String): String? {
         _state.update { it.copy(phase = PeerPhase.Error(reason)) }
         return null
+    }
+
+    private data class IncomingFileAssembly(
+        val start: FileStart,
+        val chunks: MutableMap<Int, ByteArray> = ConcurrentHashMap()
+    )
+}
+
+private fun File.uniqueSibling(): File {
+    if (!exists()) return this
+    val base = nameWithoutExtension
+    val ext = extension.takeIf { it.isNotBlank() }?.let { ".$it" } ?: ""
+    var index = 1
+    while (true) {
+        val candidate = File(parentFile, "$base-$index$ext")
+        if (!candidate.exists()) return candidate
+        index++
     }
 }
