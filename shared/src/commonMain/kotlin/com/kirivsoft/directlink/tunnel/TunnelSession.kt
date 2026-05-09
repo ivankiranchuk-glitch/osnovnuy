@@ -13,6 +13,8 @@ import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
+import java.util.Collections
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 class UdpTunnelSession(
@@ -23,9 +25,11 @@ class UdpTunnelSession(
     private val onFileStart: (FileStart) -> Unit = {},
     private val onFileChunk: (FileChunk) -> Unit = {},
     private val onFileEnd: (FileEnd) -> Unit = {},
+    private val onFileAck: (FileAck) -> Unit = {},
     private val onClosed: (String) -> Unit
 ) {
     private val nextMessageId = AtomicLong(1)
+    private val chunkAcknowledgements = ConcurrentHashMap<Long, MutableSet<Int>>()
     private var receiveJob: Job? = null
 
     fun start() {
@@ -41,8 +45,15 @@ class UdpTunnelSession(
                     when (val frame = TunnelFrameCodec.decode(bytes)) {
                         is TunnelFrame.Text -> onText(frame.text, frame.messageId)
                         is TunnelFrame.FileStartFrame -> onFileStart(frame.file)
-                        is TunnelFrame.FileChunkFrame -> onFileChunk(frame.chunk)
+                        is TunnelFrame.FileChunkFrame -> {
+                            onFileChunk(frame.chunk)
+                            sendFileAck(frame.chunk.transferId, frame.chunk.index)
+                        }
                         is TunnelFrame.FileEndFrame -> onFileEnd(frame.end)
+                        is TunnelFrame.FileAckFrame -> {
+                            chunkAcknowledgements[frame.ack.transferId]?.add(frame.ack.index)
+                            onFileAck(frame.ack)
+                        }
                         null -> Unit
                     }
                 } catch (_: SocketTimeoutException) {
@@ -68,23 +79,61 @@ class UdpTunnelSession(
         require(chunkSize in 1..MAX_FILE_CHUNK_SIZE) { "Invalid file chunk size" }
         val transferId = nextMessageId.getAndIncrement()
         val sha256 = bytes.sha256()
-        sendFrame(TunnelFrameCodec.encodeFileStart(transferId, name, bytes.size.toLong(), sha256))
-        var offset = 0
-        var index = 0
-        while (offset < bytes.size) {
-            val end = minOf(offset + chunkSize, bytes.size)
-            sendFrame(TunnelFrameCodec.encodeFileChunk(transferId, index, bytes.copyOfRange(offset, end)))
-            offset = end
-            index++
+        val chunks = bytes.toChunks(chunkSize)
+        val acked = Collections.newSetFromMap(ConcurrentHashMap<Int, Boolean>())
+        chunkAcknowledgements[transferId] = acked
+
+        try {
+            sendFrame(TunnelFrameCodec.encodeFileStart(transferId, name, bytes.size.toLong(), sha256))
+            chunks.forEachIndexed { index, chunk ->
+                sendFrame(TunnelFrameCodec.encodeFileChunk(transferId, index, chunk))
+            }
+            waitForMissingAcks(acked, chunks.size, chunks, transferId)
+            sendFrame(TunnelFrameCodec.encodeFileEnd(transferId, chunks.size, sha256))
+            return transferId
+        } finally {
+            chunkAcknowledgements.remove(transferId)
         }
-        sendFrame(TunnelFrameCodec.encodeFileEnd(transferId, index, sha256))
-        return transferId
     }
 
     fun close() {
         receiveJob?.cancel()
         receiveJob = null
+        chunkAcknowledgements.clear()
         socket.close()
+    }
+
+    private fun waitForMissingAcks(
+        acked: Set<Int>,
+        expectedChunks: Int,
+        chunks: List<ByteArray>,
+        transferId: Long
+    ) {
+        var retries = 0
+        while (acked.size < expectedChunks) {
+            waitForAcks(acked, expectedChunks)
+            if (acked.size >= expectedChunks) return
+            if (retries >= FILE_CHUNK_RETRIES) {
+                throw IllegalStateException("File transfer acknowledgement timeout")
+            }
+            chunks.forEachIndexed { index, chunk ->
+                if (index !in acked) {
+                    sendFrame(TunnelFrameCodec.encodeFileChunk(transferId, index, chunk))
+                }
+            }
+            retries++
+        }
+    }
+
+    private fun waitForAcks(acked: Set<Int>, expectedChunks: Int) {
+        val deadline = System.currentTimeMillis() + FILE_ACK_TIMEOUT_MS
+        while (!socket.isClosed && acked.size < expectedChunks && System.currentTimeMillis() < deadline) {
+            Thread.sleep(FILE_ACK_POLL_MS)
+        }
+    }
+
+    private fun sendFileAck(transferId: Long, index: Int) {
+        sendFrame(TunnelFrameCodec.encodeFileAck(transferId, index))
     }
 
     private fun sendFrame(payload: ByteArray) {
@@ -96,6 +145,9 @@ class UdpTunnelSession(
         const val MAX_FILE_CHUNK_SIZE = 60 * 1024
         private const val RECEIVE_TIMEOUT_MS = 500
         private const val MAX_PACKET_SIZE = 64 * 1024
+        private const val FILE_ACK_TIMEOUT_MS = 700L
+        private const val FILE_ACK_POLL_MS = 20L
+        private const val FILE_CHUNK_RETRIES = 3
     }
 }
 
@@ -104,6 +156,7 @@ sealed class TunnelFrame {
     data class FileStartFrame(val file: FileStart) : TunnelFrame()
     data class FileChunkFrame(val chunk: FileChunk) : TunnelFrame()
     data class FileEndFrame(val end: FileEnd) : TunnelFrame()
+    data class FileAckFrame(val ack: FileAck) : TunnelFrame()
 }
 
 data class FileStart(
@@ -148,14 +201,21 @@ data class FileEnd(
     override fun hashCode(): Int = 31 * (31 * transferId.hashCode() + chunks) + sha256.contentHashCode()
 }
 
+data class FileAck(
+    val transferId: Long,
+    val index: Int
+)
+
 object TunnelFrameCodec {
     private val MAGIC = byteArrayOf('D'.code.toByte(), 'L'.code.toByte(), 'T'.code.toByte(), '1'.code.toByte())
     private const val TYPE_TEXT: Byte = 1
     private const val TYPE_FILE_START: Byte = 2
     private const val TYPE_FILE_CHUNK: Byte = 3
     private const val TYPE_FILE_END: Byte = 4
+    private const val TYPE_FILE_ACK: Byte = 5
     private const val BASE_HEADER_SIZE = 4 + 1 + 8 + 4
     private const val SHA256_SIZE = 32
+    private const val MAX_FILE_NAME_BYTES = 65_535
 
     fun encodeText(messageId: Long, text: String): ByteArray {
         val payload = text.toByteArray(Charsets.UTF_8)
@@ -164,8 +224,10 @@ object TunnelFrameCodec {
     }
 
     fun encodeFileStart(transferId: Long, name: String, sizeBytes: Long, sha256: ByteArray): ByteArray {
+        require(sizeBytes >= 0) { "File size must be non-negative" }
         require(sha256.size == SHA256_SIZE) { "SHA-256 must be 32 bytes" }
         val nameBytes = name.toByteArray(Charsets.UTF_8)
+        require(nameBytes.size <= MAX_FILE_NAME_BYTES) { "File name is too long" }
         val payload = ByteBuffer.allocate(8 + SHA256_SIZE + 2 + nameBytes.size)
             .order(ByteOrder.BIG_ENDIAN)
             .putLong(sizeBytes)
@@ -177,6 +239,7 @@ object TunnelFrameCodec {
     }
 
     fun encodeFileChunk(transferId: Long, index: Int, bytes: ByteArray): ByteArray {
+        require(index >= 0) { "File chunk index must be non-negative" }
         require(bytes.size <= UdpTunnelSession.MAX_FILE_CHUNK_SIZE) { "File chunk is too large for one UDP frame" }
         val payload = ByteBuffer.allocate(4 + bytes.size)
             .order(ByteOrder.BIG_ENDIAN)
@@ -187,6 +250,7 @@ object TunnelFrameCodec {
     }
 
     fun encodeFileEnd(transferId: Long, chunks: Int, sha256: ByteArray): ByteArray {
+        require(chunks >= 0) { "File chunk count must be non-negative" }
         require(sha256.size == SHA256_SIZE) { "SHA-256 must be 32 bytes" }
         val payload = ByteBuffer.allocate(4 + SHA256_SIZE)
             .order(ByteOrder.BIG_ENDIAN)
@@ -194,6 +258,15 @@ object TunnelFrameCodec {
             .put(sha256)
             .array()
         return encodePayload(TYPE_FILE_END, transferId, payload)
+    }
+
+    fun encodeFileAck(transferId: Long, index: Int): ByteArray {
+        require(index >= 0) { "File chunk index must be non-negative" }
+        val payload = ByteBuffer.allocate(4)
+            .order(ByteOrder.BIG_ENDIAN)
+            .putInt(index)
+            .array()
+        return encodePayload(TYPE_FILE_ACK, transferId, payload)
     }
 
     fun decode(bytes: ByteArray): TunnelFrame? {
@@ -211,6 +284,7 @@ object TunnelFrameCodec {
             TYPE_FILE_START -> decodeFileStart(messageId, payload)
             TYPE_FILE_CHUNK -> decodeFileChunk(messageId, payload)
             TYPE_FILE_END -> decodeFileEnd(messageId, payload)
+            TYPE_FILE_ACK -> decodeFileAck(messageId, payload)
             else -> null
         }
     }
@@ -229,6 +303,7 @@ object TunnelFrameCodec {
         if (payload.size < 8 + SHA256_SIZE + 2) return null
         val buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN)
         val sizeBytes = buffer.long
+        if (sizeBytes < 0) return null
         val sha256 = ByteArray(SHA256_SIZE).also(buffer::get)
         val nameSize = buffer.short.toInt() and 0xffff
         if (nameSize > buffer.remaining()) return null
@@ -240,6 +315,7 @@ object TunnelFrameCodec {
         if (payload.size < 4) return null
         val buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN)
         val index = buffer.int
+        if (index < 0) return null
         val chunk = ByteArray(buffer.remaining()).also(buffer::get)
         return TunnelFrame.FileChunkFrame(FileChunk(transferId, index, chunk))
     }
@@ -248,9 +324,29 @@ object TunnelFrameCodec {
         if (payload.size != 4 + SHA256_SIZE) return null
         val buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN)
         val chunks = buffer.int
+        if (chunks < 0) return null
         val sha256 = ByteArray(SHA256_SIZE).also(buffer::get)
         return TunnelFrame.FileEndFrame(FileEnd(transferId, chunks, sha256))
+    }
+
+    private fun decodeFileAck(transferId: Long, payload: ByteArray): TunnelFrame.FileAckFrame? {
+        if (payload.size != 4) return null
+        val buffer = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN)
+        val index = buffer.int
+        if (index < 0) return null
+        return TunnelFrame.FileAckFrame(FileAck(transferId, index))
     }
 }
 
 fun ByteArray.sha256(): ByteArray = MessageDigest.getInstance("SHA-256").digest(this)
+
+private fun ByteArray.toChunks(chunkSize: Int): List<ByteArray> {
+    val chunks = mutableListOf<ByteArray>()
+    var offset = 0
+    while (offset < size) {
+        val end = minOf(offset + chunkSize, size)
+        chunks += copyOfRange(offset, end)
+        offset = end
+    }
+    return chunks
+}
