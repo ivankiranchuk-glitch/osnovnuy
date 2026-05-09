@@ -36,7 +36,7 @@ class StunClient(
         return ByteBuffer.allocate(STUN_HEADER_SIZE)
             .order(ByteOrder.BIG_ENDIAN)
             .putShort(BINDING_REQUEST.toShort())
-            .putShort(0)
+            .putShort(0.toShort())
             .putInt(MAGIC_COOKIE)
             .put(transactionId)
             .array()
