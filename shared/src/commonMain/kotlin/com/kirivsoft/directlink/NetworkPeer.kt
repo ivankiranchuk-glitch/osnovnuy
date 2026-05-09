@@ -10,6 +10,7 @@ import com.kirivsoft.directlink.packet.DlpSerializer
 import com.kirivsoft.directlink.tunnel.FileChunk
 import com.kirivsoft.directlink.tunnel.FileEnd
 import com.kirivsoft.directlink.tunnel.FileStart
+import com.kirivsoft.directlink.tunnel.TunnelCipher
 import com.kirivsoft.directlink.tunnel.UdpTunnelSession
 import com.kirivsoft.directlink.tunnel.sha256
 import kotlinx.coroutines.CoroutineScope
@@ -49,6 +50,7 @@ class NetworkPeer(
     private var natResult: NatDetectionResult? = null
     private var importedPeerName: String? = null
     private var remoteEndpoint: PeerEndpoint? = null
+    private var tunnelPassword: String? = null
     private var tunnelSession: UdpTunnelSession? = null
     private val incomingFiles = ConcurrentHashMap<Long, IncomingFileAssembly>()
     private val fingerprint = UUID.nameUUIDFromBytes(config.deviceUuid.toByteArray()).toString().take(8)
@@ -88,6 +90,7 @@ class NetworkPeer(
             ttlSeconds = config.packetTtlSeconds
         )
         serializer.write(packet, password, file)
+        tunnelPassword = password
         _state.update { it.copy(phase = PeerPhase.PacketGenerated(file, fingerprint, packet.expiresAt)) }
         _events.emit(PeerEvent.DlpPacketReady(file, fingerprint))
         file
@@ -102,6 +105,7 @@ class NetworkPeer(
                     publicPort = result.packet.publicPort,
                     natType = result.packet.natType
                 )
+                tunnelPassword = password
                 _state.update { it.copy(phase = PeerPhase.AwaitingConnection(result.packet.deviceName)) }
                 result.packet.deviceName
             }
@@ -153,6 +157,7 @@ class NetworkPeer(
                     onFileStart = ::handleFileStart,
                     onFileChunk = ::handleFileChunk,
                     onFileEnd = ::handleFileEnd,
+                    cipher = tunnelPassword?.let(TunnelCipher::fromPassword),
                     onClosed = { reason ->
                         _state.update { it.copy(phase = PeerPhase.Error(reason)) }
                         _events.tryEmit(PeerEvent.ConnectionLost(reason))
@@ -213,6 +218,7 @@ class NetworkPeer(
         natResult = null
         importedPeerName = null
         remoteEndpoint = null
+        tunnelPassword = null
         incomingFiles.clear()
         _state.update { it.copy(phase = PeerPhase.Idle) }
     }
