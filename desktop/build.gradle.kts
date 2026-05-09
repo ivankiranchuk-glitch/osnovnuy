@@ -54,3 +54,11 @@ compose.desktop {
         }
     }
 }
+
+tasks.register<JavaExec>("runRelayServer") {
+    group = "application"
+    description = "Runs the DirectLink TCP relay server. Pass -PrelayPort=47777 to choose a port."
+    mainClass.set("com.kirivsoft.directlink.desktop.RelayServerMainKt")
+    classpath = kotlin.targets.getByName("jvm").compilations.getByName("main").runtimeDependencyFiles
+    args((findProperty("relayPort") as String?) ?: "47777")
+}
