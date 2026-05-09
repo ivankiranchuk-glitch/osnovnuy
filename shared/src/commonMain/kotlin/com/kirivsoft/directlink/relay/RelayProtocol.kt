@@ -56,20 +56,47 @@ object RelayFrameCodec {
         is RelayFrame.Error -> RelayEnvelope(type = TYPE_ERROR, reason = reason)
     }
 
-    private fun RelayEnvelope.toFrame(): RelayFrame? = when (type) {
-        TYPE_REGISTER -> RelayFrame.Register(peerId ?: return null, token ?: return null)
-        TYPE_REGISTERED -> RelayFrame.Registered(sessionId ?: return null)
-        TYPE_JOIN -> RelayFrame.Join(sessionId ?: return null, peerId ?: return null, token ?: return null)
-        TYPE_JOINED -> RelayFrame.Joined(sessionId ?: return null, peerId ?: return null)
-        TYPE_PAYLOAD -> RelayFrame.Payload(
-            sessionId = sessionId ?: return null,
-            fromPeerId = fromPeerId ?: return null,
-            toPeerId = toPeerId ?: return null,
-            bytes = Base64.getDecoder().decode(payloadBase64 ?: return null)
-        )
-        TYPE_CLOSE -> RelayFrame.Close(sessionId ?: return null, reason ?: "closed")
-        TYPE_ERROR -> RelayFrame.Error(reason ?: "relay error")
-        else -> null
+    private fun RelayEnvelope.toFrame(): RelayFrame? {
+        return when (type) {
+            TYPE_REGISTER -> {
+                val peerId = peerId ?: return null
+                val token = token ?: return null
+                RelayFrame.Register(peerId, token)
+            }
+            TYPE_REGISTERED -> {
+                val sessionId = sessionId ?: return null
+                RelayFrame.Registered(sessionId)
+            }
+            TYPE_JOIN -> {
+                val sessionId = sessionId ?: return null
+                val peerId = peerId ?: return null
+                val token = token ?: return null
+                RelayFrame.Join(sessionId, peerId, token)
+            }
+            TYPE_JOINED -> {
+                val sessionId = sessionId ?: return null
+                val peerId = peerId ?: return null
+                RelayFrame.Joined(sessionId, peerId)
+            }
+            TYPE_PAYLOAD -> {
+                val sessionId = sessionId ?: return null
+                val fromPeerId = fromPeerId ?: return null
+                val toPeerId = toPeerId ?: return null
+                val payload = payloadBase64 ?: return null
+                RelayFrame.Payload(
+                    sessionId = sessionId,
+                    fromPeerId = fromPeerId,
+                    toPeerId = toPeerId,
+                    bytes = Base64.getDecoder().decode(payload)
+                )
+            }
+            TYPE_CLOSE -> {
+                val sessionId = sessionId ?: return null
+                RelayFrame.Close(sessionId, reason ?: "closed")
+            }
+            TYPE_ERROR -> RelayFrame.Error(reason ?: "relay error")
+            else -> null
+        }
     }
 
     private const val TYPE_REGISTER = "register"
