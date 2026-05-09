@@ -34,16 +34,20 @@ class TunnelSessionTest {
         val start = TunnelFrameCodec.decode(TunnelFrameCodec.encodeFileStart(7, "note.txt", bytes.size.toLong(), sha256))
         val chunk = TunnelFrameCodec.decode(TunnelFrameCodec.encodeFileChunk(7, 0, bytes))
         val end = TunnelFrameCodec.decode(TunnelFrameCodec.encodeFileEnd(7, 1, sha256))
+        val ack = TunnelFrameCodec.decode(TunnelFrameCodec.encodeFileAck(7, 0))
 
         assertTrue(start is TunnelFrame.FileStartFrame)
         assertTrue(chunk is TunnelFrame.FileChunkFrame)
         assertTrue(end is TunnelFrame.FileEndFrame)
+        assertTrue(ack is TunnelFrame.FileAckFrame)
         start as TunnelFrame.FileStartFrame
         chunk as TunnelFrame.FileChunkFrame
         end as TunnelFrame.FileEndFrame
+        ack as TunnelFrame.FileAckFrame
         assertEquals(FileStart(7, "note.txt", bytes.size.toLong(), sha256), start.file)
         assertEquals(FileChunk(7, 0, bytes), chunk.chunk)
         assertEquals(FileEnd(7, 1, sha256), end.end)
+        assertEquals(FileAck(7, 0), ack.ack)
     }
 
     @Test
@@ -91,11 +95,12 @@ class TunnelSessionTest {
     }
 
     @Test
-    fun `UDP tunnel session sends file frames`() {
+    fun `UDP tunnel session sends file frames and acknowledgements`() {
         val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         val starts = LinkedBlockingQueue<FileStart>()
         val chunks = LinkedBlockingQueue<FileChunk>()
         val ends = LinkedBlockingQueue<FileEnd>()
+        val acknowledgements = LinkedBlockingQueue<FileAck>()
         val bytes = ByteArray(40_000) { (it % 251).toByte() }
 
         DatagramSocket(0).use { senderSocket ->
@@ -105,6 +110,7 @@ class TunnelSessionTest {
                     remoteAddress = InetSocketAddress("127.0.0.1", receiverSocket.localPort),
                     scope = scope,
                     onText = { _, _ -> },
+                    onFileAck = acknowledgements::offer,
                     onClosed = {}
                 )
                 val receiver = UdpTunnelSession(
@@ -129,6 +135,11 @@ class TunnelSessionTest {
                     chunks.poll(2, TimeUnit.SECONDS)
                 )
                 val end = ends.poll(2, TimeUnit.SECONDS)
+                val receivedAcks = listOf(
+                    acknowledgements.poll(2, TimeUnit.SECONDS),
+                    acknowledgements.poll(2, TimeUnit.SECONDS),
+                    acknowledgements.poll(2, TimeUnit.SECONDS)
+                )
 
                 assertEquals("payload.bin", start.name)
                 assertEquals(bytes.size.toLong(), start.sizeBytes)
@@ -138,6 +149,7 @@ class TunnelSessionTest {
                 assertArrayEquals(bytes.copyOfRange(32_000, bytes.size), receivedChunks[2].bytes)
                 assertEquals(3, end.chunks)
                 assertArrayEquals(bytes.sha256(), end.sha256)
+                assertEquals(listOf(0, 1, 2), receivedAcks.map { it.index })
                 sender.close()
                 receiver.close()
             }
