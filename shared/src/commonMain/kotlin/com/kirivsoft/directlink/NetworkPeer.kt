@@ -33,12 +33,14 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import java.net.URI
+import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -70,6 +72,9 @@ class NetworkPeer(
     private var relayReceiveJob: Job? = null
     private val nextRelayMessageId = AtomicLong(1)
     private val incomingFiles = ConcurrentHashMap<Long, IncomingFileAssembly>()
+    private val relayChunkAcknowledgements = ConcurrentHashMap<Long, MutableSet<Int>>()
+    private val relayOutgoingFiles = ConcurrentHashMap<Long, OutgoingFileTransfer>()
+    private val relayCancelledTransfers = ConcurrentHashMap.newKeySet<Long>()
     private val fingerprint = UUID.nameUUIDFromBytes(config.deviceUuid.toByteArray()).toString().take(8)
 
     suspend fun initialize() = withContext(Dispatchers.IO) {
@@ -288,8 +293,9 @@ class NetworkPeer(
             _events.emit(PeerEvent.SendFailed("Session is not connected"))
             return
         }
-        if (state.value.phase is PeerPhase.RelayConnected) {
-            _events.emit(PeerEvent.SendFailed("Relay file sending is not wired yet"))
+        val phase = state.value.phase
+        if (phase is PeerPhase.RelayConnected) {
+            sendRelayFile(phase, file)
             return
         }
         val bytes = runCatching { file.readBytes() }.getOrElse { error ->
@@ -308,7 +314,10 @@ class NetworkPeer(
     }
 
     fun cancelFileTransfers() {
-        val cancelled = tunnelSession?.cancelFileTransfers() ?: false
+        val udpCancelled = tunnelSession?.cancelFileTransfers() ?: false
+        val relayActive = relayOutgoingFiles.keys.toList()
+        relayCancelledTransfers.addAll(relayActive)
+        val cancelled = udpCancelled || relayActive.isNotEmpty()
         if (!cancelled) {
             _events.tryEmit(PeerEvent.SendFailed("No active file transfer"))
         }
@@ -327,38 +336,147 @@ class NetworkPeer(
     }
 
     private suspend fun sendRelayText(phase: PeerPhase.RelayConnected, text: String) {
-        val client = relayClient ?: run {
-            _events.emit(PeerEvent.SendFailed("Relay client is not ready"))
-            return
-        }
         val targetPeerId = importedPeerId ?: run {
             _events.emit(PeerEvent.SendFailed("Remote peer id is missing"))
             return
         }
-        val cipher = relayCipher ?: run {
-            _events.emit(PeerEvent.SendFailed("Relay cipher is not ready"))
-            return
-        }
         val messageId = nextRelayMessageId.getAndIncrement()
         val frameBytes = TunnelFrameCodec.encodeText(messageId, text)
-        val payload = RelayFrame.Payload(
-            sessionId = phase.relaySessionId,
-            fromPeerId = config.deviceUuid,
-            toPeerId = targetPeerId,
-            bytes = cipher.encrypt(frameBytes)
-        )
-        runCatching { client.send(payload) }.getOrElse { error ->
+        runCatching { sendRelayTunnelFrame(phase.relaySessionId, targetPeerId, frameBytes) }.getOrElse { error ->
             _events.emit(PeerEvent.SendFailed(error.message ?: "Relay text send failed"))
             return
         }
         _state.update { it.copy(sentMessages = it.sentMessages + 1, sentBytes = it.sentBytes + text.toByteArray().size) }
     }
 
+    private suspend fun sendRelayFile(phase: PeerPhase.RelayConnected, file: File) {
+        val targetPeerId = importedPeerId ?: run {
+            _events.emit(PeerEvent.SendFailed("Remote peer id is missing"))
+            return
+        }
+        val bytes = runCatching { file.readBytes() }.getOrElse { error ->
+            _events.emit(PeerEvent.SendFailed(error.message ?: "Cannot read file"))
+            return
+        }
+        val transferId = nextRelayMessageId.getAndIncrement()
+        val sha256 = bytes.sha256()
+        val chunks = bytes.toChunks(UdpTunnelSession.DEFAULT_FILE_CHUNK_SIZE)
+        val acked = Collections.newSetFromMap(ConcurrentHashMap<Int, Boolean>())
+        relayChunkAcknowledgements[transferId] = acked
+        relayOutgoingFiles[transferId] = OutgoingFileTransfer(file.name, bytes.size.toLong(), chunks.map { it.size.toLong() })
+        reportRelaySendProgress(transferId)
+
+        runCatching {
+            ensureRelayNotCancelled(transferId)
+            sendRelayTunnelFrame(
+                phase.relaySessionId,
+                targetPeerId,
+                TunnelFrameCodec.encodeFileStart(transferId, file.name, bytes.size.toLong(), sha256)
+            )
+            chunks.forEachIndexed { index, chunk ->
+                ensureRelayNotCancelled(transferId)
+                sendRelayTunnelFrame(
+                    phase.relaySessionId,
+                    targetPeerId,
+                    TunnelFrameCodec.encodeFileChunk(transferId, index, chunk)
+                )
+            }
+            waitForRelayMissingAcks(phase.relaySessionId, targetPeerId, acked, chunks.size, chunks, transferId)
+            ensureRelayNotCancelled(transferId)
+            sendRelayTunnelFrame(
+                phase.relaySessionId,
+                targetPeerId,
+                TunnelFrameCodec.encodeFileEnd(transferId, chunks.size, sha256)
+            )
+            reportRelaySendProgress(transferId)
+        }.getOrElse { error ->
+            relayChunkAcknowledgements.remove(transferId)
+            relayOutgoingFiles.remove(transferId)
+            relayCancelledTransfers.remove(transferId)
+            _events.emit(PeerEvent.SendFailed(error.message ?: "Relay file send failed"))
+            return
+        }
+
+        relayChunkAcknowledgements.remove(transferId)
+        relayOutgoingFiles.remove(transferId)
+        relayCancelledTransfers.remove(transferId)
+        _state.update { it.copy(sentMessages = it.sentMessages + 1, sentBytes = it.sentBytes + bytes.size) }
+    }
+
+    private fun sendRelayTunnelFrame(sessionId: String, targetPeerId: String, frameBytes: ByteArray) {
+        val client = relayClient ?: error("Relay client is not ready")
+        val cipher = relayCipher ?: error("Relay cipher is not ready")
+        client.send(
+            RelayFrame.Payload(
+                sessionId = sessionId,
+                fromPeerId = config.deviceUuid,
+                toPeerId = targetPeerId,
+                bytes = cipher.encrypt(frameBytes)
+            )
+        )
+    }
+
+    private fun waitForRelayMissingAcks(
+        sessionId: String,
+        targetPeerId: String,
+        acked: Set<Int>,
+        expectedChunks: Int,
+        chunks: List<ByteArray>,
+        transferId: Long
+    ) {
+        var retries = 0
+        while (acked.size < expectedChunks) {
+            ensureRelayNotCancelled(transferId)
+            waitForRelayAcks(acked, expectedChunks, transferId)
+            ensureRelayNotCancelled(transferId)
+            if (acked.size >= expectedChunks) return
+            if (retries >= RELAY_FILE_CHUNK_RETRIES) {
+                throw IllegalStateException("Relay file transfer acknowledgement timeout")
+            }
+            chunks.forEachIndexed { index, chunk ->
+                ensureRelayNotCancelled(transferId)
+                if (index !in acked) {
+                    sendRelayTunnelFrame(sessionId, targetPeerId, TunnelFrameCodec.encodeFileChunk(transferId, index, chunk))
+                }
+            }
+            retries++
+        }
+    }
+
+    private fun waitForRelayAcks(acked: Set<Int>, expectedChunks: Int, transferId: Long) {
+        val deadline = System.currentTimeMillis() + RELAY_FILE_ACK_TIMEOUT_MS
+        while (acked.size < expectedChunks && System.currentTimeMillis() < deadline) {
+            ensureRelayNotCancelled(transferId)
+            Thread.sleep(RELAY_FILE_ACK_POLL_MS)
+        }
+    }
+
+    private fun reportRelaySendProgress(transferId: Long) {
+        val transfer = relayOutgoingFiles[transferId] ?: return
+        val acked = relayChunkAcknowledgements[transferId].orEmpty()
+        val completedBytes = acked.sumOf { index -> transfer.chunkSizes.getOrNull(index) ?: 0L }
+        handleFileSendProgress(
+            FileTransferProgress(
+                transferId = transferId,
+                name = transfer.name,
+                completedBytes = completedBytes.coerceAtMost(transfer.sizeBytes),
+                totalBytes = transfer.sizeBytes
+            )
+        )
+    }
+
+    private fun ensureRelayNotCancelled(transferId: Long) {
+        if (transferId in relayCancelledTransfers) {
+            throw IllegalStateException("File transfer cancelled")
+        }
+    }
+
     private fun startRelayReceive(client: TcpRelayClient) {
         relayReceiveJob?.cancel()
         relayReceiveJob = scope.launch(Dispatchers.IO) {
-            while (true) {
+            while (isActive) {
                 val frame = runCatching { client.receive() }.getOrElse { error ->
+                    if (!isActive) return@launch
                     _state.update { it.copy(phase = PeerPhase.Error(error.message ?: "Relay receive failed")) }
                     _events.tryEmit(PeerEvent.ConnectionLost(error.message ?: "Relay receive failed"))
                     return@launch
@@ -382,7 +500,25 @@ class NetworkPeer(
         val clearBytes = relayCipher?.decrypt(frame.bytes) ?: return
         when (val tunnelFrame = TunnelFrameCodec.decode(clearBytes)) {
             is TunnelFrame.Text -> handleIncomingText(tunnelFrame.text, tunnelFrame.messageId)
-            else -> Unit
+            is TunnelFrame.FileStartFrame -> handleFileStart(tunnelFrame.file)
+            is TunnelFrame.FileChunkFrame -> {
+                handleFileChunk(tunnelFrame.chunk)
+                runCatching {
+                    sendRelayTunnelFrame(
+                        sessionId = frame.sessionId,
+                        targetPeerId = frame.fromPeerId,
+                        frameBytes = TunnelFrameCodec.encodeFileAck(tunnelFrame.chunk.transferId, tunnelFrame.chunk.index)
+                    )
+                }.onFailure { error ->
+                    _events.tryEmit(PeerEvent.SendFailed(error.message ?: "Relay file acknowledgement failed"))
+                }
+            }
+            is TunnelFrame.FileEndFrame -> handleFileEnd(tunnelFrame.end)
+            is TunnelFrame.FileAckFrame -> {
+                relayChunkAcknowledgements[tunnelFrame.ack.transferId]?.add(tunnelFrame.ack.index)
+                reportRelaySendProgress(tunnelFrame.ack.transferId)
+            }
+            null -> Unit
         }
     }
 
@@ -477,6 +613,9 @@ class NetworkPeer(
         relayClient?.close()
         relayClient = null
         relayCipher = null
+        relayChunkAcknowledgements.clear()
+        relayOutgoingFiles.clear()
+        relayCancelledTransfers.clear()
     }
 
     private fun detectNat(): NatDetectionResult = natResult ?: natDetector
@@ -501,6 +640,12 @@ class NetworkPeer(
         fun receivedBytes(): Long = chunks.values.sumOf { it.size.toLong() }
     }
 
+    private data class OutgoingFileTransfer(
+        val name: String,
+        val sizeBytes: Long,
+        val chunkSizes: List<Long>
+    )
+
     private data class RelayAddress(val host: String, val port: Int) {
         companion object {
             fun parse(value: String): RelayAddress {
@@ -512,6 +657,12 @@ class NetworkPeer(
                 return RelayAddress(host, port)
             }
         }
+    }
+
+    private companion object {
+        private const val RELAY_FILE_ACK_TIMEOUT_MS = 1_500L
+        private const val RELAY_FILE_ACK_POLL_MS = 20L
+        private const val RELAY_FILE_CHUNK_RETRIES = 3
     }
 }
 
@@ -530,4 +681,15 @@ private fun File.uniqueSibling(): File {
 private fun String.safeFileName(): String {
     val forbidden = charArrayOf('\\', '/', ':', '*', '?', '"', '<', '>', '|')
     return map { if (it in forbidden) '_' else it }.joinToString("").ifBlank { "directlink-file" }
+}
+
+private fun ByteArray.toChunks(chunkSize: Int): List<ByteArray> {
+    val chunks = mutableListOf<ByteArray>()
+    var offset = 0
+    while (offset < size) {
+        val end = minOf(offset + chunkSize, size)
+        chunks += copyOfRange(offset, end)
+        offset = end
+    }
+    return chunks
 }
