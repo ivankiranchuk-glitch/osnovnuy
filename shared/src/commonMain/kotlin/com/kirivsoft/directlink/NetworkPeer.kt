@@ -44,6 +44,7 @@ import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.io.path.createTempDirectory
 
 class NetworkPeer(
     private val config: PeerConfig,
@@ -96,7 +97,7 @@ class NetworkPeer(
 
     suspend fun generateDlpPacket(password: String, outputDir: File? = config.fileSaveDir): File = withContext(Dispatchers.IO) {
         val nat = detectNat()
-        val dir = outputDir ?: createTempDir("directlink_")
+        val dir = outputDir ?: createTempDirectory("directlink_").toFile()
         dir.mkdirs()
         val file = File(dir, "directlink_${System.currentTimeMillis()}.dlp")
         val packet = serializer.buildPacket(
@@ -285,7 +286,7 @@ class NetworkPeer(
             _events.emit(PeerEvent.SendFailed("UDP tunnel is not ready"))
             return
         }
-        _state.update { it.copy(sentMessages = it.sentMessages + 1, sentBytes = it.sentBytes + bytes) }
+        _state.update { it.copy(sentMessages = it.sentMessages + 1, sentBytes = bytes + it.sentBytes) }
     }
 
     suspend fun sendFile(file: File) {
@@ -556,7 +557,7 @@ class NetworkPeer(
             _events.tryEmit(PeerEvent.ConnectionLost("File checksum mismatch"))
             return
         }
-        val dir = config.fileSaveDir ?: createTempDir("directlink_files_")
+        val dir = config.fileSaveDir ?: createTempDirectory("directlink_files_").toFile()
         dir.mkdirs()
         val safeName = assembly.start.name.safeFileName()
         val output = File(dir, safeName).uniqueSibling()
