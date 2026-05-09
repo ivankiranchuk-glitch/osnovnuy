@@ -40,6 +40,7 @@ class UdpTunnelSession(
     private val nextMessageId = AtomicLong(1)
     private val chunkAcknowledgements = ConcurrentHashMap<Long, MutableSet<Int>>()
     private val outgoingFiles = ConcurrentHashMap<Long, OutgoingFileTransfer>()
+    private val cancelledTransfers = ConcurrentHashMap.newKeySet<Long>()
     private var receiveJob: Job? = null
 
     fun start() {
@@ -98,18 +99,28 @@ class UdpTunnelSession(
         reportSendProgress(transferId)
 
         try {
+            ensureNotCancelled(transferId)
             sendFrame(TunnelFrameCodec.encodeFileStart(transferId, name, bytes.size.toLong(), sha256))
             chunks.forEachIndexed { index, chunk ->
+                ensureNotCancelled(transferId)
                 sendFrame(TunnelFrameCodec.encodeFileChunk(transferId, index, chunk))
             }
             waitForMissingAcks(acked, chunks.size, chunks, transferId)
+            ensureNotCancelled(transferId)
             sendFrame(TunnelFrameCodec.encodeFileEnd(transferId, chunks.size, sha256))
             reportSendProgress(transferId)
             return transferId
         } finally {
             chunkAcknowledgements.remove(transferId)
             outgoingFiles.remove(transferId)
+            cancelledTransfers.remove(transferId)
         }
+    }
+
+    fun cancelFileTransfers(): Boolean {
+        val activeIds = outgoingFiles.keys.toList()
+        cancelledTransfers.addAll(activeIds)
+        return activeIds.isNotEmpty()
     }
 
     fun close() {
@@ -117,6 +128,7 @@ class UdpTunnelSession(
         receiveJob = null
         chunkAcknowledgements.clear()
         outgoingFiles.clear()
+        cancelledTransfers.clear()
         socket.close()
     }
 
@@ -128,12 +140,15 @@ class UdpTunnelSession(
     ) {
         var retries = 0
         while (acked.size < expectedChunks) {
-            waitForAcks(acked, expectedChunks)
+            ensureNotCancelled(transferId)
+            waitForAcks(acked, expectedChunks, transferId)
+            ensureNotCancelled(transferId)
             if (acked.size >= expectedChunks) return
             if (retries >= FILE_CHUNK_RETRIES) {
                 throw IllegalStateException("File transfer acknowledgement timeout")
             }
             chunks.forEachIndexed { index, chunk ->
+                ensureNotCancelled(transferId)
                 if (index !in acked) {
                     sendFrame(TunnelFrameCodec.encodeFileChunk(transferId, index, chunk))
                 }
@@ -142,9 +157,10 @@ class UdpTunnelSession(
         }
     }
 
-    private fun waitForAcks(acked: Set<Int>, expectedChunks: Int) {
+    private fun waitForAcks(acked: Set<Int>, expectedChunks: Int, transferId: Long) {
         val deadline = System.currentTimeMillis() + FILE_ACK_TIMEOUT_MS
         while (!socket.isClosed && acked.size < expectedChunks && System.currentTimeMillis() < deadline) {
+            ensureNotCancelled(transferId)
             Thread.sleep(FILE_ACK_POLL_MS)
         }
     }
@@ -161,6 +177,12 @@ class UdpTunnelSession(
                 totalBytes = transfer.sizeBytes
             )
         )
+    }
+
+    private fun ensureNotCancelled(transferId: Long) {
+        if (transferId in cancelledTransfers) {
+            throw IllegalStateException("File transfer cancelled")
+        }
     }
 
     private fun sendFileAck(transferId: Long, index: Int) {
