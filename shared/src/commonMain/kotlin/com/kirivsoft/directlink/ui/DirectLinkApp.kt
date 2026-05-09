@@ -8,8 +8,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -19,11 +22,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.kirivsoft.directlink.NetworkPeer
 import com.kirivsoft.directlink.PeerEvent
@@ -39,18 +44,36 @@ fun DirectLinkApp(
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val activity = remember { mutableStateListOf<ActivityItem>() }
     var password by remember { mutableStateOf("") }
     var importPath by remember { mutableStateOf("") }
+    var message by remember { mutableStateOf("") }
+    var sendFilePath by remember { mutableStateOf("") }
     val state by peer.state.collectAsState()
     fun packetPassword(): String = password.ifBlank { "directlink" }
 
     LaunchedEffect(Unit) {
         peer.events.collect { event ->
             when (event) {
-                is PeerEvent.DlpPacketReady -> onShare(event.file.absolutePath)
-                is PeerEvent.SendFailed -> snackbarHostState.showSnackbar(event.reason)
-                is PeerEvent.ConnectionLost -> snackbarHostState.showSnackbar(event.reason)
-                else -> Unit
+                is PeerEvent.DlpPacketReady -> {
+                    activity.prepend(ActivityItem("DLP packet", event.file.absolutePath))
+                    onShare(event.file.absolutePath)
+                }
+                is PeerEvent.IncomingText -> activity.prepend(ActivityItem("Incoming text", event.text))
+                is PeerEvent.IncomingFile -> activity.prepend(
+                    ActivityItem(
+                        title = "Incoming file",
+                        detail = "${event.name} (${event.sizeBytes} bytes)\n${event.savedPath}"
+                    )
+                )
+                is PeerEvent.SendFailed -> {
+                    activity.prepend(ActivityItem("Send failed", event.reason))
+                    snackbarHostState.showSnackbar(event.reason)
+                }
+                is PeerEvent.ConnectionLost -> {
+                    activity.prepend(ActivityItem("Connection lost", event.reason))
+                    snackbarHostState.showSnackbar(event.reason)
+                }
             }
         }
     }
@@ -60,8 +83,8 @@ fun DirectLinkApp(
             modifier = Modifier.fillMaxSize().padding(padding).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("DirectLink")
-            Text(phaseText(state.phase))
+            Text("DirectLink", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
+            Text(phaseText(state.phase), style = MaterialTheme.typography.bodyMedium)
 
             OutlinedTextField(
                 value = password,
@@ -88,7 +111,7 @@ fun DirectLinkApp(
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { onPickFile { importPath = it } }) {
-                    Text("Pick file")
+                    Text("Pick DLP")
                 }
                 Button(onClick = { scope.launch { peer.importDlpPacket(File(importPath), packetPassword()) } }) {
                     Text("Import")
@@ -96,6 +119,39 @@ fun DirectLinkApp(
                 Button(onClick = { scope.launch { peer.connect() } }) {
                     Text("Connect")
                 }
+            }
+
+            OutlinedTextField(
+                value = message,
+                onValueChange = { message = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Message") }
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = {
+                        val text = message
+                        message = ""
+                        scope.launch { peer.sendText(text) }
+                    },
+                    enabled = message.isNotBlank()
+                ) {
+                    Text("Send text")
+                }
+                Button(onClick = { onPickFile { sendFilePath = it } }) {
+                    Text("Pick file")
+                }
+                Button(
+                    onClick = { scope.launch { peer.sendFile(File(sendFilePath)) } },
+                    enabled = sendFilePath.isNotBlank()
+                ) {
+                    Text("Send file")
+                }
+            }
+
+            if (sendFilePath.isNotBlank()) {
+                Text(sendFilePath, style = MaterialTheme.typography.bodySmall)
             }
 
             Spacer(Modifier.height(8.dp))
@@ -107,8 +163,33 @@ fun DirectLinkApp(
                     Text("Received bytes: ${state.receivedBytes}")
                 }
             }
+
+            Text("Activity", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(activity) { item ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(item.title, fontWeight = FontWeight.SemiBold)
+                            Text(item.detail, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
         }
     }
+}
+
+private data class ActivityItem(
+    val title: String,
+    val detail: String
+)
+
+private fun MutableList<ActivityItem>.prepend(item: ActivityItem) {
+    add(0, item)
+    if (size > 30) removeAt(lastIndex)
 }
 
 private fun phaseText(phase: PeerPhase): String = when (phase) {
