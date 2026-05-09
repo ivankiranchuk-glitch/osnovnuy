@@ -25,7 +25,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
             packageName = "DirectLink"
-            packageVersion = "0.1.0"
+            packageVersion = "1.0.0"
             description = "Encrypted P2P Direct Tunnel"
             vendor = "KirivSoft"
             licenseFile.set(rootProject.file("LICENSE"))
@@ -38,7 +38,8 @@ compose.desktop {
             }
             macOS {
                 bundleID = "com.kirivsoft.directlink"
-                dmgPackageVersion = "0.1.0"
+                packageVersion = "1.0.0"
+                dmgPackageVersion = "1.0.0"
             }
             linux {
                 debMaintainer = "kirivsoft@example.com"
