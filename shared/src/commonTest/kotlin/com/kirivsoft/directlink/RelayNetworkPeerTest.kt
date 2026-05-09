@@ -11,7 +11,7 @@ import com.kirivsoft.directlink.relay.TcpRelayServer
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -20,7 +20,7 @@ import java.io.File
 
 class RelayNetworkPeerTest {
     @Test
-    fun `network peer can host a relay session`() = runTest {
+    fun `network peer can host a relay session`() = runBlocking {
         val dir = createTempDir("directlink_relay_test_")
         TcpRelayServer(coordinator = RelayServerCoordinator { "session-1" }).use { server ->
             server.start()
@@ -43,7 +43,7 @@ class RelayNetworkPeerTest {
     }
 
     @Test
-    fun `network peer can join an existing relay session`() = runTest {
+    fun `network peer can join an existing relay session`() = runBlocking {
         val dir = createTempDir("directlink_relay_test_")
         TcpRelayServer(coordinator = RelayServerCoordinator { "session-1" }).use { server ->
             server.start()
@@ -80,7 +80,7 @@ class RelayNetworkPeerTest {
     }
 
     @Test
-    fun `relay connected peers exchange encrypted text payloads`() = runTest {
+    fun `relay connected peers exchange encrypted text payloads`() = runBlocking {
         val dir = createTempDir("directlink_relay_text_test_")
         TcpRelayServer(coordinator = RelayServerCoordinator { "session-1" }).use { server ->
             server.start()
@@ -106,7 +106,7 @@ class RelayNetworkPeerTest {
     }
 
     @Test
-    fun `relay connected peers exchange encrypted file payloads`() = runTest {
+    fun `relay connected peers exchange encrypted file payloads`() = runBlocking {
         val root = createTempDir("directlink_relay_file_test_")
         val hostDir = File(root, "host").apply { mkdirs() }
         val guestDir = File(root, "guest").apply { mkdirs() }
@@ -137,7 +137,7 @@ class RelayNetworkPeerTest {
     }
 
     @Test
-    fun `relay peers can send file and text in opposite directions`() = runTest {
+    fun `relay peers can send file and text in opposite directions`() = runBlocking {
         val root = createTempDir("directlink_relay_bidirectional_test_")
         val hostDir = File(root, "host").apply { mkdirs() }
         val guestDir = File(root, "guest").apply { mkdirs() }
