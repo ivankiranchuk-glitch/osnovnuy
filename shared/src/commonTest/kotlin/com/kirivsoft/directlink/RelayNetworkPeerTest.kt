@@ -136,6 +136,50 @@ class RelayNetworkPeerTest {
         root.deleteRecursively()
     }
 
+    @Test
+    fun `relay peers can send file and text in opposite directions`() = runTest {
+        val root = createTempDir("directlink_relay_bidirectional_test_")
+        val hostDir = File(root, "host").apply { mkdirs() }
+        val guestDir = File(root, "guest").apply { mkdirs() }
+        TcpRelayServer(coordinator = RelayServerCoordinator { "session-1" }).use { server ->
+            server.start()
+            val host = NetworkPeer(testConfig("Host Device", "host-device", hostDir))
+            val guest = NetworkPeer(testConfig("Guest Device", "guest-device", guestDir))
+            val file = File(hostDir, "host-to-guest.txt").apply { writeText("payload from host") }
+
+            connectPeersThroughRelay(host, guest, root, server)
+
+            val incomingFile = async {
+                withTimeout(5_000) {
+                    guest.events.filterIsInstance<PeerEvent.IncomingFile>().first()
+                }
+            }
+            val incomingText = async {
+                withTimeout(5_000) {
+                    host.events.filterIsInstance<PeerEvent.IncomingText>().first()
+                }
+            }
+            val fileSend = async { host.sendFile(file) }
+            val textSend = async { guest.sendText("guest says hi") }
+
+            fileSend.await()
+            textSend.await()
+            val receivedFile = incomingFile.await()
+            val receivedText = incomingText.await()
+
+            assertEquals("host-to-guest.txt", receivedFile.name)
+            assertEquals("payload from host", File(receivedFile.savedPath).readText())
+            assertEquals("guest says hi", receivedText.text)
+            assertEquals(1, host.state.value.sentMessages)
+            assertEquals(1, host.state.value.receivedMessages)
+            assertEquals(1, guest.state.value.sentMessages)
+            assertEquals(1, guest.state.value.receivedMessages)
+            host.close()
+            guest.close()
+        }
+        root.deleteRecursively()
+    }
+
     private suspend fun connectPeersThroughRelay(
         host: NetworkPeer,
         guest: NetworkPeer,
