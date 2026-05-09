@@ -101,6 +101,17 @@ fun DirectLinkApp(
             Text("DirectLink", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
             Text(phaseText(state.phase), style = MaterialTheme.typography.bodyMedium)
 
+            val relayPhase = state.phase as? PeerPhase.RelayRequired
+            if (relayPhase != null) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text("Relay required", fontWeight = FontWeight.SemiBold)
+                        Text(relayPhase.reason, style = MaterialTheme.typography.bodySmall)
+                        Text("Relay: ${relayPhase.relayUrl ?: "not configured"}", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
@@ -262,5 +273,6 @@ private fun phaseText(phase: PeerPhase): String = when (phase) {
     is PeerPhase.PacketGenerated -> "Packet generated: ${phase.dlpFile.name}"
     is PeerPhase.AwaitingConnection -> "Awaiting connection with ${phase.peerName}"
     is PeerPhase.Connected -> "Connected to ${phase.peerName}"
+    is PeerPhase.RelayRequired -> "Relay required for ${phase.peerName}"
     is PeerPhase.Error -> "Error: ${phase.reason}"
 }
