@@ -8,6 +8,7 @@ import com.kirivsoft.directlink.network.PunchResult
 import com.kirivsoft.directlink.packet.DlpParseResult
 import com.kirivsoft.directlink.packet.DlpSerializer
 import com.kirivsoft.directlink.relay.RelayClientHandshake
+import com.kirivsoft.directlink.relay.RelayFrame
 import com.kirivsoft.directlink.relay.RelayHandshakeRole
 import com.kirivsoft.directlink.relay.RelayHandshakeState
 import com.kirivsoft.directlink.relay.TcpRelayClient
@@ -16,10 +17,13 @@ import com.kirivsoft.directlink.tunnel.FileEnd
 import com.kirivsoft.directlink.tunnel.FileStart
 import com.kirivsoft.directlink.tunnel.FileTransferProgress
 import com.kirivsoft.directlink.tunnel.TunnelCipher
+import com.kirivsoft.directlink.tunnel.TunnelFrame
+import com.kirivsoft.directlink.tunnel.TunnelFrameCodec
 import com.kirivsoft.directlink.tunnel.UdpTunnelSession
 import com.kirivsoft.directlink.tunnel.sha256
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -29,6 +33,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.DatagramSocket
@@ -36,6 +41,7 @@ import java.net.InetSocketAddress
 import java.net.URI
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 class NetworkPeer(
     private val config: PeerConfig,
@@ -55,10 +61,14 @@ class NetworkPeer(
 
     private var natResult: NatDetectionResult? = null
     private var importedPeerName: String? = null
+    private var importedPeerId: String? = null
     private var remoteEndpoint: PeerEndpoint? = null
     private var tunnelPassword: String? = null
     private var tunnelSession: UdpTunnelSession? = null
     private var relayClient: TcpRelayClient? = null
+    private var relayCipher: TunnelCipher? = null
+    private var relayReceiveJob: Job? = null
+    private val nextRelayMessageId = AtomicLong(1)
     private val incomingFiles = ConcurrentHashMap<Long, IncomingFileAssembly>()
     private val fingerprint = UUID.nameUUIDFromBytes(config.deviceUuid.toByteArray()).toString().take(8)
 
@@ -107,6 +117,7 @@ class NetworkPeer(
         when (val result = serializer.parse(file, password)) {
             is DlpParseResult.Success -> {
                 importedPeerName = result.packet.deviceName
+                importedPeerId = result.packet.deviceUuid
                 remoteEndpoint = PeerEndpoint(
                     publicIp = result.packet.publicIp,
                     publicPort = result.packet.publicPort,
@@ -237,6 +248,8 @@ class NetworkPeer(
         }
 
         relayClient = client
+        relayCipher = TunnelCipher.fromPassword(token)
+        startRelayReceive(client)
         _state.update {
             it.copy(
                 phase = PeerPhase.RelayConnected(
@@ -253,8 +266,9 @@ class NetworkPeer(
             _events.emit(PeerEvent.SendFailed("Session is not connected"))
             return
         }
-        if (state.value.phase is PeerPhase.RelayConnected) {
-            _events.emit(PeerEvent.SendFailed("Relay payload sending is not wired yet"))
+        val phase = state.value.phase
+        if (phase is PeerPhase.RelayConnected) {
+            sendRelayText(phase, text)
             return
         }
         val bytes = text.toByteArray().size
@@ -275,7 +289,7 @@ class NetworkPeer(
             return
         }
         if (state.value.phase is PeerPhase.RelayConnected) {
-            _events.emit(PeerEvent.SendFailed("Relay payload sending is not wired yet"))
+            _events.emit(PeerEvent.SendFailed("Relay file sending is not wired yet"))
             return
         }
         val bytes = runCatching { file.readBytes() }.getOrElse { error ->
@@ -305,10 +319,71 @@ class NetworkPeer(
         closeRelayOnly()
         natResult = null
         importedPeerName = null
+        importedPeerId = null
         remoteEndpoint = null
         tunnelPassword = null
         incomingFiles.clear()
         _state.update { it.copy(phase = PeerPhase.Idle) }
+    }
+
+    private suspend fun sendRelayText(phase: PeerPhase.RelayConnected, text: String) {
+        val client = relayClient ?: run {
+            _events.emit(PeerEvent.SendFailed("Relay client is not ready"))
+            return
+        }
+        val targetPeerId = importedPeerId ?: run {
+            _events.emit(PeerEvent.SendFailed("Remote peer id is missing"))
+            return
+        }
+        val cipher = relayCipher ?: run {
+            _events.emit(PeerEvent.SendFailed("Relay cipher is not ready"))
+            return
+        }
+        val messageId = nextRelayMessageId.getAndIncrement()
+        val frameBytes = TunnelFrameCodec.encodeText(messageId, text)
+        val payload = RelayFrame.Payload(
+            sessionId = phase.relaySessionId,
+            fromPeerId = config.deviceUuid,
+            toPeerId = targetPeerId,
+            bytes = cipher.encrypt(frameBytes)
+        )
+        runCatching { client.send(payload) }.getOrElse { error ->
+            _events.emit(PeerEvent.SendFailed(error.message ?: "Relay text send failed"))
+            return
+        }
+        _state.update { it.copy(sentMessages = it.sentMessages + 1, sentBytes = it.sentBytes + text.toByteArray().size) }
+    }
+
+    private fun startRelayReceive(client: TcpRelayClient) {
+        relayReceiveJob?.cancel()
+        relayReceiveJob = scope.launch(Dispatchers.IO) {
+            while (true) {
+                val frame = runCatching { client.receive() }.getOrElse { error ->
+                    _state.update { it.copy(phase = PeerPhase.Error(error.message ?: "Relay receive failed")) }
+                    _events.tryEmit(PeerEvent.ConnectionLost(error.message ?: "Relay receive failed"))
+                    return@launch
+                } ?: continue
+                when (frame) {
+                    is RelayFrame.Payload -> handleRelayPayload(frame)
+                    is RelayFrame.Close -> {
+                        _state.update { it.copy(phase = PeerPhase.Error(frame.reason)) }
+                        _events.tryEmit(PeerEvent.ConnectionLost(frame.reason))
+                        return@launch
+                    }
+                    is RelayFrame.Error -> _events.tryEmit(PeerEvent.SendFailed(frame.reason))
+                    else -> Unit
+                }
+            }
+        }
+    }
+
+    private fun handleRelayPayload(frame: RelayFrame.Payload) {
+        if (frame.toPeerId != config.deviceUuid) return
+        val clearBytes = relayCipher?.decrypt(frame.bytes) ?: return
+        when (val tunnelFrame = TunnelFrameCodec.decode(clearBytes)) {
+            is TunnelFrame.Text -> handleIncomingText(tunnelFrame.text, tunnelFrame.messageId)
+            else -> Unit
+        }
     }
 
     private fun handleIncomingText(text: String, messageId: Long) {
@@ -397,8 +472,11 @@ class NetworkPeer(
     }
 
     private fun closeRelayOnly() {
+        relayReceiveJob?.cancel()
+        relayReceiveJob = null
         relayClient?.close()
         relayClient = null
+        relayCipher = null
     }
 
     private fun detectNat(): NatDetectionResult = natResult ?: natDetector
