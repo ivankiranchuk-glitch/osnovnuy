@@ -21,6 +21,7 @@ sealed class PeerPhase {
     ) : PeerPhase()
     data class AwaitingConnection(val peerName: String) : PeerPhase()
     data class Connected(val peerName: String, val sessionId: Long, val rttMs: Long) : PeerPhase()
+    data class RelayRequired(val peerName: String, val relayUrl: String?, val reason: String) : PeerPhase()
     data class Error(val reason: String, val recoverable: Boolean = true) : PeerPhase()
 }
 
