@@ -11,6 +11,7 @@ import com.kirivsoft.directlink.tunnel.FileChunk
 import com.kirivsoft.directlink.tunnel.FileEnd
 import com.kirivsoft.directlink.tunnel.FileStart
 import com.kirivsoft.directlink.tunnel.UdpTunnelSession
+import com.kirivsoft.directlink.tunnel.sha256
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -180,7 +181,7 @@ class NetworkPeer(
             _events.emit(PeerEvent.SendFailed(error.message ?: "Text send failed"))
             return
         }
-        if (sent == null && tunnelSession != null) {
+        if (sent == null) {
             _events.emit(PeerEvent.SendFailed("UDP tunnel is not ready"))
             return
         }
@@ -200,7 +201,7 @@ class NetworkPeer(
             _events.emit(PeerEvent.SendFailed(error.message ?: "File send failed"))
             return
         }
-        if (sent == null && tunnelSession != null) {
+        if (sent == null) {
             _events.emit(PeerEvent.SendFailed("UDP tunnel is not ready"))
             return
         }
@@ -242,13 +243,15 @@ class NetworkPeer(
             return
         }
         val bytes = orderedChunks.fold(ByteArray(0)) { acc, chunk -> acc + chunk }
-        if (!bytes.contentEquals(bytes.copyOf(bytes.size)) || !end.sha256.contentEquals(com.kirivsoft.directlink.tunnel.sha256(bytes))) {
+        val actualSha256 = bytes.sha256()
+        if (!assembly.start.sha256.contentEquals(end.sha256) || !actualSha256.contentEquals(end.sha256)) {
             _events.tryEmit(PeerEvent.ConnectionLost("File checksum mismatch"))
             return
         }
         val dir = config.fileSaveDir ?: createTempDir("directlink_files_")
         dir.mkdirs()
-        val output = File(dir, assembly.start.name).uniqueSibling()
+        val safeName = assembly.start.name.safeFileName()
+        val output = File(dir, safeName).uniqueSibling()
         output.writeBytes(bytes)
         _state.update {
             it.copy(
@@ -256,7 +259,7 @@ class NetworkPeer(
                 receivedBytes = it.receivedBytes + bytes.size
             )
         }
-        _events.tryEmit(PeerEvent.IncomingFile(assembly.start.name, bytes.size.toLong(), output.absolutePath, end.sha256))
+        _events.tryEmit(PeerEvent.IncomingFile(safeName, bytes.size.toLong(), output.absolutePath, actualSha256))
     }
 
     private fun closeTunnelOnly() {
@@ -295,4 +298,9 @@ private fun File.uniqueSibling(): File {
         if (!candidate.exists()) return candidate
         index++
     }
+}
+
+private fun String.safeFileName(): String {
+    val forbidden = charArrayOf('\\', '/', ':', '*', '?', '"', '<', '>', '|')
+    return map { if (it in forbidden) '_' else it }.joinToString("").ifBlank { "directlink-file" }
 }
