@@ -96,6 +96,13 @@ fun DirectLinkApp(
         }
     }
 
+    val relayConnected = state.phase as? PeerPhase.RelayConnected
+    LaunchedEffect(relayConnected?.relaySessionId) {
+        if (relayConnected != null) {
+            relaySessionId = relayConnected.relaySessionId
+        }
+    }
+
     Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
         Column(
             modifier = Modifier.fillMaxSize().padding(padding).padding(20.dp),
@@ -105,7 +112,6 @@ fun DirectLinkApp(
             Text(phaseText(state.phase), style = MaterialTheme.typography.bodyMedium)
 
             val relayPhase = state.phase as? PeerPhase.RelayRequired
-            val relayConnected = state.phase as? PeerPhase.RelayConnected
             if (relayPhase != null) {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
