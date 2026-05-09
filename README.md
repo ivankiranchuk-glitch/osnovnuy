@@ -17,7 +17,7 @@ Networking now has a typed NAT detection contract, local IP lookup, UDP/TCP port
 
 When direct punching fails and `relayUrl` is configured, the peer moves into an explicit `RelayRequired` phase instead of a generic error. The shared relay module defines JSON relay frames, client handshake state, a minimal in-memory relay coordinator, and a TCP line-delimited JSON relay transport for local register, join, payload routing, close, and error tests. The desktop module can run this relay transport as a standalone local server process, and the shared peer facade can connect to that server as either the relay host or relay guest. Text messages and file payloads can be routed through the established relay session using the same encrypted tunnel frame format as the UDP path.
 
-The shared Compose UI can initialize networking, create and import `.dlp` packets, connect to a peer, send text, pick a file for sending, and show a recent activity log for generated packets, incoming text, incoming files, send failures, and connection loss. It also surfaces sending and receiving progress for recent file transfers, with a control for cancelling active transfers. Relay-required connection attempts are shown as a dedicated state with the configured relay URL. The UI also includes relay URL/session fields plus Host relay and Join relay actions for opening a TCP relay session. Relay text and relay file sending are wired through the same send controls.
+The shared Compose UI can initialize networking, create and import `.dlp` packets, connect to a peer, send text, pick a file for sending, and show a recent activity log for generated packets, incoming text, incoming files, send failures, and connection loss. It also surfaces sending and receiving progress for recent file transfers, with a control for cancelling active transfers. Relay-required connection attempts are shown as a dedicated state with the configured relay URL. The UI also includes relay URL/session fields plus Host relay and Join relay actions for opening a TCP relay session. Relay text and relay file sending are wired through the same send controls. After hosting a relay session, the UI copies the generated session id into the Relay session field for easier manual testing.
 
 ## Build
 
@@ -63,7 +63,7 @@ Relay server run:
 
 ## Local Relay Workflow
 
-Use the relay server when direct UDP punching fails or when you want to test the fallback path locally.
+Use the relay server when direct UDP punching fails or when you want to test the fallback path locally. Relay still needs both app sessions to import each other's `.dlp` packet first, because the packet provides the remote peer id and the shared password used for encrypted payload routing.
 
 1. Start the relay server in one terminal and leave it running:
 
@@ -71,16 +71,22 @@ Use the relay server when direct UDP punching fails or when you want to test the
 .\gradlew.bat :desktop:runRelayServer
 ```
 
-2. Start the desktop app in another terminal:
+2. Start two desktop app windows in two other terminals:
 
 ```powershell
 .\gradlew.bat :desktop:run
 ```
 
-3. In the app, use `tcp://127.0.0.1:47777` as the relay URL.
-4. On the first device/session, click Host relay and copy the displayed relay session id.
-5. On the second device/session, paste that session id and click Join relay.
-6. After both sides show relay connected, text messages and files can be sent through the relay session.
+3. In both app windows, use the same packet password, for example `directlink`.
+4. In both app windows, keep the relay URL as `tcp://127.0.0.1:47777`.
+5. In window A, click Create .dlp and copy the generated packet path from Activity.
+6. In window B, paste that path into DLP file path and click Import.
+7. In window B, click Create .dlp and copy the generated packet path from Activity.
+8. In window A, paste that path into DLP file path and click Import.
+9. In window A, click Host relay. The generated relay session id appears in the Relay session field and in the relay connected card.
+10. Copy that relay session id into window B's Relay session field.
+11. In window B, click Join relay.
+12. After both sides show relay connected, text messages and files can be sent through the relay session.
 
 Direct UDP remains the preferred path when hole punching succeeds; relay is the fallback path when direct connectivity is unavailable.
 
