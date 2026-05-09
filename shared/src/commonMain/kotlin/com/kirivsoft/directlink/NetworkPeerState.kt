@@ -43,8 +43,22 @@ sealed class PeerEvent {
         val savedPath: String,
         val sha256: ByteArray
     ) : PeerEvent()
+    data class FileTransferProgress(
+        val direction: FileTransferDirection,
+        val name: String,
+        val completedBytes: Long,
+        val totalBytes: Long
+    ) : PeerEvent() {
+        val percent: Int get() = if (totalBytes <= 0L) 100 else ((completedBytes * 100) / totalBytes).toInt().coerceIn(0, 100)
+        val isComplete: Boolean get() = totalBytes == 0L || completedBytes >= totalBytes
+    }
     data class SendFailed(val reason: String) : PeerEvent()
     data class ConnectionLost(val reason: String) : PeerEvent()
+}
+
+enum class FileTransferDirection {
+    Sending,
+    Receiving
 }
 
 data class PeerConfig(
