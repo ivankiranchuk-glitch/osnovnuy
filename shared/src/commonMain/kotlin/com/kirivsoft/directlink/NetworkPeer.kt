@@ -7,6 +7,10 @@ import com.kirivsoft.directlink.network.PeerEndpoint
 import com.kirivsoft.directlink.network.PunchResult
 import com.kirivsoft.directlink.packet.DlpParseResult
 import com.kirivsoft.directlink.packet.DlpSerializer
+import com.kirivsoft.directlink.relay.RelayClientHandshake
+import com.kirivsoft.directlink.relay.RelayHandshakeRole
+import com.kirivsoft.directlink.relay.RelayHandshakeState
+import com.kirivsoft.directlink.relay.TcpRelayClient
 import com.kirivsoft.directlink.tunnel.FileChunk
 import com.kirivsoft.directlink.tunnel.FileEnd
 import com.kirivsoft.directlink.tunnel.FileStart
@@ -29,6 +33,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
+import java.net.URI
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -53,6 +58,7 @@ class NetworkPeer(
     private var remoteEndpoint: PeerEndpoint? = null
     private var tunnelPassword: String? = null
     private var tunnelSession: UdpTunnelSession? = null
+    private var relayClient: TcpRelayClient? = null
     private val incomingFiles = ConcurrentHashMap<Long, IncomingFileAssembly>()
     private val fingerprint = UUID.nameUUIDFromBytes(config.deviceUuid.toByteArray()).toString().take(8)
 
@@ -126,6 +132,7 @@ class NetworkPeer(
         }
 
         closeTunnelOnly()
+        closeRelayOnly()
         if (isSelfEndpoint(endpoint, nat)) {
             _state.update { it.copy(phase = PeerPhase.Connected(peerName, System.currentTimeMillis(), 0)) }
             return@withContext
@@ -178,9 +185,76 @@ class NetworkPeer(
         }
     }
 
+    suspend fun connectViaRelay(
+        relayUrl: String? = config.relayUrl,
+        role: RelayHandshakeRole = RelayHandshakeRole.Host,
+        sessionId: String? = null
+    ) = withContext(Dispatchers.IO) {
+        val target = relayUrl?.takeIf { it.isNotBlank() } ?: run {
+            _events.emit(PeerEvent.SendFailed("Relay URL is not configured"))
+            return@withContext
+        }
+        val token = tunnelPassword?.takeIf { it.isNotBlank() } ?: run {
+            _events.emit(PeerEvent.SendFailed("Packet password is required before relay connect"))
+            return@withContext
+        }
+        val peerName = importedPeerName ?: "DirectLink peer"
+        val address = runCatching { RelayAddress.parse(target) }.getOrElse { error ->
+            _events.emit(PeerEvent.SendFailed(error.message ?: "Invalid relay URL"))
+            return@withContext
+        }
+
+        closeTunnelOnly()
+        closeRelayOnly()
+        val client = runCatching { TcpRelayClient(address.host, address.port) }.getOrElse { error ->
+            _events.emit(PeerEvent.SendFailed(error.message ?: "Relay connection failed"))
+            return@withContext
+        }
+        val handshake = runCatching {
+            RelayClientHandshake(
+                peerId = config.deviceUuid,
+                token = token,
+                role = role,
+                requestedSessionId = sessionId
+            )
+        }.getOrElse { error ->
+            client.close()
+            _events.emit(PeerEvent.SendFailed(error.message ?: "Relay handshake setup failed"))
+            return@withContext
+        }
+
+        client.send(handshake.start())
+        val response = client.receive() ?: run {
+            client.close()
+            _events.emit(PeerEvent.SendFailed("Relay handshake timed out"))
+            return@withContext
+        }
+        handshake.handle(response)
+        if (handshake.state != RelayHandshakeState.Ready || handshake.sessionId == null) {
+            client.close()
+            _events.emit(PeerEvent.SendFailed(handshake.failureReason ?: "Relay handshake failed"))
+            return@withContext
+        }
+
+        relayClient = client
+        _state.update {
+            it.copy(
+                phase = PeerPhase.RelayConnected(
+                    peerName = peerName,
+                    relayUrl = target,
+                    relaySessionId = handshake.sessionId!!
+                )
+            )
+        }
+    }
+
     suspend fun sendText(text: String) {
         if (!state.value.isConnected) {
             _events.emit(PeerEvent.SendFailed("Session is not connected"))
+            return
+        }
+        if (state.value.phase is PeerPhase.RelayConnected) {
+            _events.emit(PeerEvent.SendFailed("Relay payload sending is not wired yet"))
             return
         }
         val bytes = text.toByteArray().size
@@ -198,6 +272,10 @@ class NetworkPeer(
     suspend fun sendFile(file: File) {
         if (!state.value.isConnected) {
             _events.emit(PeerEvent.SendFailed("Session is not connected"))
+            return
+        }
+        if (state.value.phase is PeerPhase.RelayConnected) {
+            _events.emit(PeerEvent.SendFailed("Relay payload sending is not wired yet"))
             return
         }
         val bytes = runCatching { file.readBytes() }.getOrElse { error ->
@@ -224,6 +302,7 @@ class NetworkPeer(
 
     fun close() {
         closeTunnelOnly()
+        closeRelayOnly()
         natResult = null
         importedPeerName = null
         remoteEndpoint = null
@@ -317,6 +396,11 @@ class NetworkPeer(
         tunnelSession = null
     }
 
+    private fun closeRelayOnly() {
+        relayClient?.close()
+        relayClient = null
+    }
+
     private fun detectNat(): NatDetectionResult = natResult ?: natDetector
         .detect(config.preferredUdpPort, config.preferredTcpPort)
         .also { natResult = it }
@@ -337,6 +421,19 @@ class NetworkPeer(
         val chunks: MutableMap<Int, ByteArray> = ConcurrentHashMap()
     ) {
         fun receivedBytes(): Long = chunks.values.sumOf { it.size.toLong() }
+    }
+
+    private data class RelayAddress(val host: String, val port: Int) {
+        companion object {
+            fun parse(value: String): RelayAddress {
+                val normalized = if ("://" in value) value else "tcp://$value"
+                val uri = URI(normalized)
+                require(uri.scheme == "tcp") { "Relay URL must use tcp://host:port" }
+                val host = uri.host ?: error("Relay URL host is missing")
+                val port = uri.port.takeIf { it in 1..65535 } ?: error("Relay URL port is missing")
+                return RelayAddress(host, port)
+            }
+        }
     }
 }
 
