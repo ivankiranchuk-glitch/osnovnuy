@@ -28,6 +28,9 @@ jobs:
       - name: Run shared desktop tests
         run: ./gradlew :shared:desktopTest
 
+      - name: Run relay smoke test
+        run: ./gradlew :shared:relaySmokeTest
+
       - name: Build desktop classes
         run: ./gradlew :desktop:compileKotlinJvm
 
