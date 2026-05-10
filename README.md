@@ -71,6 +71,16 @@ Relay smoke test without opening app windows:
 
 This focused test starts an in-process relay server, creates two peers, imports each peer's `.dlp` packet, connects host and guest through relay, sends encrypted text, sends encrypted files, and verifies a bidirectional mixed payload flow.
 
+## Android Emulator
+
+The Android debug APK can be installed and launched on a connected emulator. The full walkthrough is available in [`docs/android-emulator-test.md`](docs/android-emulator-test.md).
+
+```powershell
+.\gradlew.bat :android:assembleDebug
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r "C:\Users\kiran\osnovnuy\android\build\outputs\apk\debug\android-debug.apk"
+& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" shell monkey -p com.kirivsoft.directlink -c android.intent.category.LAUNCHER 1
+```
+
 ## Local Relay Workflow
 
 Use the relay server when direct UDP punching fails or when you want to test the fallback path locally. Relay still needs both app sessions to import each other's `.dlp` packet first, because the packet provides the remote peer id and the shared password used for encrypted payload routing.
