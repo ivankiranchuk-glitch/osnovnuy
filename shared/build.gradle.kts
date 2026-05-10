@@ -102,10 +102,12 @@ tasks.withType<Test>().configureEach {
 tasks.register<Test>("relaySmokeTest") {
     group = "verification"
     description = "Runs the focused relay host/join, encrypted text, file, and bidirectional payload smoke tests."
-    testClassesDirs = tasks.named<Test>("desktopTest").get().testClassesDirs
-    classpath = tasks.named<Test>("desktopTest").get().classpath
+    val desktopTest = tasks.named<Test>("desktopTest")
+    dependsOn("desktopTestClasses")
+    testClassesDirs = desktopTest.get().testClassesDirs
+    classpath = desktopTest.get().classpath
     useJUnitPlatform {
         includeClassNamePatterns(".*RelayNetworkPeerTest")
     }
-    shouldRunAfter(tasks.named("desktopTest"))
+    shouldRunAfter(desktopTest)
 }
