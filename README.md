@@ -28,6 +28,7 @@ Windows PowerShell commands from the repository root:
 ```powershell
 .\gradlew.bat projects
 .\gradlew.bat :shared:desktopTest
+.\gradlew.bat :shared:relaySmokeTest
 .\gradlew.bat :desktop:compileKotlinJvm
 .\gradlew.bat :android:assembleDebug
 ```
@@ -37,6 +38,7 @@ macOS/Linux commands from the repository root:
 ```bash
 ./gradlew projects
 ./gradlew :shared:desktopTest
+./gradlew :shared:relaySmokeTest
 ./gradlew :desktop:compileKotlinJvm
 ./gradlew :android:assembleDebug
 ```
@@ -60,6 +62,14 @@ Relay server run:
 .\gradlew.bat :desktop:runRelayServer
 .\gradlew.bat :desktop:runRelayServer -PrelayPort=48888
 ```
+
+Relay smoke test without opening app windows:
+
+```powershell
+.\gradlew.bat :shared:relaySmokeTest
+```
+
+This focused test starts an in-process relay server, creates two peers, imports each peer's `.dlp` packet, connects host and guest through relay, sends encrypted text, sends encrypted files, and verifies a bidirectional mixed payload flow.
 
 ## Local Relay Workflow
 
