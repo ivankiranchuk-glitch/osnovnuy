@@ -200,28 +200,32 @@ fun DirectLinkApp(
                 label = { Text("Message") }
             )
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = {
-                        val text = message
-                        message = ""
-                        scope.launch { peer.sendText(text) }
-                    },
-                    enabled = message.isNotBlank()
-                ) {
-                    Text("Send text")
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            val text = message
+                            message = ""
+                            scope.launch { peer.sendText(text) }
+                        },
+                        enabled = message.isNotBlank()
+                    ) {
+                        Text("Send text")
+                    }
+                    Button(onClick = { onPickFile { sendFilePath = it } }) {
+                        Text("Pick file")
+                    }
                 }
-                Button(onClick = { onPickFile { sendFilePath = it } }) {
-                    Text("Pick file")
-                }
-                Button(
-                    onClick = { scope.launch { peer.sendFile(File(sendFilePath)) } },
-                    enabled = sendFilePath.isNotBlank()
-                ) {
-                    Text("Send file")
-                }
-                Button(onClick = { peer.cancelFileTransfers() }) {
-                    Text("Cancel transfers")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { scope.launch { peer.sendFile(File(sendFilePath)) } },
+                        enabled = sendFilePath.isNotBlank()
+                    ) {
+                        Text("Send file")
+                    }
+                    Button(onClick = { peer.cancelFileTransfers() }) {
+                        Text("Cancel transfers")
+                    }
                 }
             }
 
