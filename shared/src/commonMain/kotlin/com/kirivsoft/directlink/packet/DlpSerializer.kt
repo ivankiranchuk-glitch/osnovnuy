@@ -21,7 +21,7 @@ class DlpSerializer(
         publicIp: String,
         publicPort: Int,
         natType: NatType,
-        password: String,
+        @Suppress("UNUSED_PARAMETER") password: String,
         ttlSeconds: Long,
         nowSeconds: Long = System.currentTimeMillis() / 1000
     ): DlpPacket = DlpPacket(
