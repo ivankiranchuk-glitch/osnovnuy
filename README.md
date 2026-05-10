@@ -6,12 +6,12 @@ Encrypted peer-to-peer tunnel MVP built with Kotlin, Compose Multiplatform, and 
 
 This repository currently contains a compact, build-oriented MVP scaffold:
 
-- `shared`: Kotlin Multiplatform shared model, peer facade, encrypted MVP DLP packet serializer, STUN/NAT detector, UDP hole-punching manager, encrypted UDP tunnel session for text and file frames, relay protocol handshake model, TCP relay transport, and Compose UI.
+- `shared`: Kotlin Multiplatform shared model, peer facade, encrypted DLP packet serializer, STUN/NAT detector, UDP hole-punching manager, encrypted UDP tunnel session for text and file frames, relay protocol handshake model, TCP relay transport, and Compose UI.
 - `desktop`: Compose Desktop application entrypoint plus a standalone relay server entrypoint.
 - `android`: Android application entrypoint and manifest.
 - GitHub Actions CI runs Gradle project checks, shared desktop tests, relay smoke tests, desktop compilation, and Android debug APK assembly through the Gradle Wrapper.
 
-The DLP packet layer now has an explicit model, encrypted container format, password validation through AEAD authentication, TTL validation, peer public endpoint fields, and unit tests. The current MVP container uses PBKDF2-HMAC-SHA256 plus AES-GCM because those primitives are available from the JDK on desktop and Android. The next production hardening step is to switch the packet KDF/cipher suite to the intended Argon2id + ChaCha20-Poly1305 implementation.
+The DLP packet layer now has an explicit model, encrypted container format, password validation through AEAD authentication, TTL validation, peer public endpoint fields, and unit tests. New packets are written as `DLP2` containers using Argon2id key derivation plus ChaCha20-Poly1305 authenticated encryption through Bouncy Castle. Legacy `DLP1` packets that used PBKDF2-HMAC-SHA256 plus AES-GCM remain readable for backward compatibility.
 
 Networking now has a typed NAT detection contract, local IP lookup, UDP/TCP port selection, an RFC 5389-style STUN Binding Request client/parser for `MAPPED-ADDRESS` and `XOR-MAPPED-ADDRESS`, an initial UDP hole-punching flow, and a UDP tunnel session for text and chunked file frames. The peer facade stores imported DLP endpoint details, attempts a direct UDP punch, keeps the socket open after a successful punch, sends text through the tunnel session, and can frame outgoing files with SHA-256 verification on receive. File chunks are acknowledged by the receiver, missing chunks are retried before the final file frame is sent, and UDP tunnel frames are encrypted with an AES-GCM key derived from the shared DLP password. Outgoing file transfers can be cancelled while they are waiting for acknowledgements.
 
@@ -105,7 +105,7 @@ Direct UDP remains the preferred path when hole punching succeeds; relay is the 
 ## Next Milestones
 
 1. Run two-device/manual relay validation for text and file transfer.
-2. Upgrade encrypted DLP packet storage to Argon2id + ChaCha20-Poly1305.
-3. Add stronger NAT classification around the UDP punch flow.
-4. Add broader end-to-end two-peer integration coverage for direct and relay workflows.
-5. Improve desktop and Android file picker/share integration around real device workflows.
+2. Add stronger NAT classification around the UDP punch flow.
+3. Add broader end-to-end two-peer integration coverage for direct and relay workflows.
+4. Improve desktop and Android file picker/share integration around real device workflows.
+5. Prepare desktop release packaging and Android release validation.
