@@ -5,19 +5,21 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.io.File
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
+import kotlin.io.path.createTempFile
 
 class DlpSerializerTest {
     private val serializer = DlpSerializer()
 
     @Test
     fun `written packet parses with matching password`() {
-        val file = createTempFile("directlink_", ".dlp")
+        val file = tempDlpFile()
         val packet = testPacket()
 
         serializer.write(packet, "pass", file)
@@ -34,7 +36,7 @@ class DlpSerializerTest {
 
     @Test
     fun `written packet uses dlp2 container`() {
-        val file = createTempFile("directlink_", ".dlp")
+        val file = tempDlpFile()
         val packet = testPacket()
 
         serializer.write(packet, "pass", file)
@@ -46,7 +48,7 @@ class DlpSerializerTest {
 
     @Test
     fun `written packet does not expose plaintext metadata`() {
-        val file = createTempFile("directlink_", ".dlp")
+        val file = tempDlpFile()
         val packet = testPacket()
 
         serializer.write(packet, "pass", file)
@@ -59,7 +61,7 @@ class DlpSerializerTest {
 
     @Test
     fun `parser rejects wrong password`() {
-        val file = createTempFile("directlink_", ".dlp")
+        val file = tempDlpFile()
         val packet = testPacket()
 
         serializer.write(packet, "pass", file)
@@ -71,7 +73,7 @@ class DlpSerializerTest {
 
     @Test
     fun `parser rejects expired packet`() {
-        val file = createTempFile("directlink_", ".dlp")
+        val file = tempDlpFile()
         val packet = testPacket(ttlSeconds = 5)
 
         serializer.write(packet, "pass", file)
@@ -83,7 +85,7 @@ class DlpSerializerTest {
 
     @Test
     fun `parser reads legacy dlp1 packet`() {
-        val file = createTempFile("directlink_legacy_", ".dlp")
+        val file = tempDlpFile("directlink_legacy_")
         val packet = testPacket()
         val plaintext = legacyPlaintext(packet)
 
@@ -140,4 +142,6 @@ class DlpSerializerTest {
         }
         return byteArrayOf('D'.code.toByte(), 'L'.code.toByte(), 'P'.code.toByte(), '1'.code.toByte()) + salt + nonce + ciphertext
     }
+
+    private fun tempDlpFile(prefix: String = "directlink_"): File = createTempFile(prefix, ".dlp").toFile()
 }
