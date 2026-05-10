@@ -106,8 +106,9 @@ tasks.register<Test>("relaySmokeTest") {
     dependsOn("desktopTestClasses")
     testClassesDirs = desktopTest.get().testClassesDirs
     classpath = desktopTest.get().classpath
-    useJUnitPlatform {
-        includeClassNamePatterns(".*RelayNetworkPeerTest")
+    useJUnitPlatform()
+    filter {
+        includeTestsMatching("com.kirivsoft.directlink.RelayNetworkPeerTest")
     }
     shouldRunAfter(desktopTest)
 }
