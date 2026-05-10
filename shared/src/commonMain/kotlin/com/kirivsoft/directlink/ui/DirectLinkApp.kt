@@ -51,7 +51,7 @@ fun DirectLinkApp(
     val transfers = remember { mutableStateListOf<TransferItem>() }
     var password by remember { mutableStateOf("") }
     var importPath by remember { mutableStateOf("") }
-    var relayUrl by remember { mutableStateOf("tcp://127.0.0.1:47777") }
+    var relayUrl by remember { mutableStateOf(defaultRelayUrl()) }
     var relaySessionId by remember { mutableStateOf("") }
     var message by remember { mutableStateOf("") }
     var sendFilePath by remember { mutableStateOf("") }
@@ -314,6 +314,16 @@ private fun MutableList<TransferItem>.upsert(item: TransferItem) {
 private fun FileTransferDirection.label(): String = when (this) {
     FileTransferDirection.Sending -> "Sending"
     FileTransferDirection.Receiving -> "Receiving"
+}
+
+private fun defaultRelayUrl(): String {
+    val runtimeName = System.getProperty("java.runtime.name").orEmpty()
+    val vmName = System.getProperty("java.vm.name").orEmpty()
+    return if (runtimeName.contains("Android", ignoreCase = true) || vmName.contains("Dalvik", ignoreCase = true)) {
+        "tcp://10.0.2.2:47777"
+    } else {
+        "tcp://127.0.0.1:47777"
+    }
 }
 
 private fun phaseText(phase: PeerPhase): String = when (phase) {
