@@ -50,6 +50,8 @@ fun DirectLinkApp(
     val scrollState = rememberScrollState()
     val activity = remember { mutableStateListOf<ActivityItem>() }
     val transfers = remember { mutableStateListOf<TransferItem>() }
+    var language by remember { mutableStateOf(UiLanguage.Ukrainian) }
+    val text = uiText(language)
     var password by remember { mutableStateOf("") }
     var importPath by remember { mutableStateOf("") }
     var relayUrl by remember { mutableStateOf(defaultRelayUrl()) }
@@ -59,18 +61,18 @@ fun DirectLinkApp(
     val state by peer.state.collectAsState()
     fun packetPassword(): String = password.ifBlank { "directlink" }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(language) {
         peer.events.collect { event ->
             when (event) {
                 is PeerEvent.DlpPacketReady -> {
-                    activity.prepend(ActivityItem("DLP packet", event.file.absolutePath))
+                    activity.prepend(ActivityItem(text.activityDlpPacket, event.file.absolutePath))
                     onShare(event.file.absolutePath)
                 }
-                is PeerEvent.IncomingText -> activity.prepend(ActivityItem("Incoming text", event.text))
+                is PeerEvent.IncomingText -> activity.prepend(ActivityItem(text.activityIncomingText, event.text))
                 is PeerEvent.IncomingFile -> activity.prepend(
                     ActivityItem(
-                        title = "Incoming file",
-                        detail = "${event.name} (${event.sizeBytes} bytes)\n${event.savedPath}"
+                        title = text.activityIncomingFile,
+                        detail = "${event.name} (${event.sizeBytes} ${text.bytes})\n${event.savedPath}"
                     )
                 )
                 is PeerEvent.FileTransferProgress -> {
@@ -86,11 +88,11 @@ fun DirectLinkApp(
                     )
                 }
                 is PeerEvent.SendFailed -> {
-                    activity.prepend(ActivityItem("Send failed", event.reason))
+                    activity.prepend(ActivityItem(text.activitySendFailed, event.reason))
                     snackbarHostState.showSnackbar(event.reason)
                 }
                 is PeerEvent.ConnectionLost -> {
-                    activity.prepend(ActivityItem("Connection lost", event.reason))
+                    activity.prepend(ActivityItem(text.activityConnectionLost, event.reason))
                     snackbarHostState.showSnackbar(event.reason)
                 }
             }
@@ -114,24 +116,39 @@ fun DirectLinkApp(
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text("DirectLink", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold)
-            Text(phaseText(state.phase), style = MaterialTheme.typography.bodyMedium)
+            Text(phaseText(state.phase, text), style = MaterialTheme.typography.bodyMedium)
+
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(text.settings, fontWeight = FontWeight.SemiBold)
+                    Text(text.interfaceLanguage, style = MaterialTheme.typography.bodySmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { language = UiLanguage.Ukrainian }, enabled = language != UiLanguage.Ukrainian) {
+                            Text("Українська")
+                        }
+                        Button(onClick = { language = UiLanguage.English }, enabled = language != UiLanguage.English) {
+                            Text("English")
+                        }
+                    }
+                }
+            }
 
             val relayPhase = state.phase as? PeerPhase.RelayRequired
             if (relayPhase != null) {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Relay required", fontWeight = FontWeight.SemiBold)
+                        Text(text.relayRequired, fontWeight = FontWeight.SemiBold)
                         Text(relayPhase.reason, style = MaterialTheme.typography.bodySmall)
-                        Text("Relay: ${relayPhase.relayUrl ?: "not configured"}", style = MaterialTheme.typography.bodySmall)
+                        Text("${text.relay}: ${relayPhase.relayUrl ?: text.notConfigured}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
             if (relayConnected != null) {
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text("Relay connected", fontWeight = FontWeight.SemiBold)
-                        Text("Relay: ${relayConnected.relayUrl}", style = MaterialTheme.typography.bodySmall)
-                        Text("Session: ${relayConnected.relaySessionId}", style = MaterialTheme.typography.bodySmall)
+                        Text(text.relayConnected, fontWeight = FontWeight.SemiBold)
+                        Text("${text.relay}: ${relayConnected.relayUrl}", style = MaterialTheme.typography.bodySmall)
+                        Text("${text.session}: ${relayConnected.relaySessionId}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -140,15 +157,15 @@ fun DirectLinkApp(
                 value = password,
                 onValueChange = { password = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Packet password") }
+                label = { Text(text.packetPassword) }
             )
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { scope.launch { peer.initialize() } }) {
-                    Text("Initialize")
+                    Text(text.initialize)
                 }
                 Button(onClick = { scope.launch { peer.generateDlpPacket(packetPassword()) } }) {
-                    Text("Create .dlp")
+                    Text(text.createDlp)
                 }
             }
 
@@ -156,18 +173,22 @@ fun DirectLinkApp(
                 value = importPath,
                 onValueChange = { importPath = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("DLP file path") }
+                label = { Text(text.dlpFilePath) }
             )
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { onPickFile { importPath = it } }) {
-                    Text("Pick DLP")
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onPickFile { importPath = it } }) {
+                        Text(text.pickDlp)
+                    }
+                    Button(onClick = { scope.launch { peer.importDlpPacket(File(importPath), packetPassword()) } }) {
+                        Text(text.importDlp)
+                    }
                 }
-                Button(onClick = { scope.launch { peer.importDlpPacket(File(importPath), packetPassword()) } }) {
-                    Text("Import")
-                }
-                Button(onClick = { scope.launch { peer.connect() } }) {
-                    Text("Connect")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { scope.launch { peer.connect() } }) {
+                        Text(text.connectDirect)
+                    }
                 }
             }
 
@@ -175,17 +196,17 @@ fun DirectLinkApp(
                 value = relayUrl,
                 onValueChange = { relayUrl = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Relay URL") }
+                label = { Text(text.relayUrl) }
             )
             OutlinedTextField(
                 value = relaySessionId,
                 onValueChange = { relaySessionId = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Relay session") }
+                label = { Text(text.relaySession) }
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = { scope.launch { peer.connectViaRelay(relayUrl, RelayHandshakeRole.Host) } }) {
-                    Text("Host relay")
+                    Text(text.hostRelay)
                 }
                 Button(
                     onClick = {
@@ -194,7 +215,7 @@ fun DirectLinkApp(
                         }
                     }
                 ) {
-                    Text("Join relay")
+                    Text(text.joinRelay)
                 }
             }
 
@@ -202,23 +223,23 @@ fun DirectLinkApp(
                 value = message,
                 onValueChange = { message = it },
                 modifier = Modifier.fillMaxWidth(),
-                label = { Text("Message") }
+                label = { Text(text.message) }
             )
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
-                            val text = message
+                            val currentMessage = message
                             message = ""
-                            scope.launch { peer.sendText(text) }
+                            scope.launch { peer.sendText(currentMessage) }
                         },
                         enabled = message.isNotBlank()
                     ) {
-                        Text("Send text")
+                        Text(text.sendText)
                     }
                     Button(onClick = { onPickFile { sendFilePath = it } }) {
-                        Text("Pick file")
+                        Text(text.pickFile)
                     }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -226,10 +247,10 @@ fun DirectLinkApp(
                         onClick = { scope.launch { peer.sendFile(File(sendFilePath)) } },
                         enabled = sendFilePath.isNotBlank()
                     ) {
-                        Text("Send file")
+                        Text(text.sendFile)
                     }
                     Button(onClick = { peer.cancelFileTransfers() }) {
-                        Text("Cancel transfers")
+                        Text(text.cancelTransfers)
                     }
                 }
             }
@@ -241,26 +262,26 @@ fun DirectLinkApp(
             Spacer(Modifier.height(8.dp))
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("Sent messages: ${state.sentMessages}")
-                    Text("Received messages: ${state.receivedMessages}")
-                    Text("Sent bytes: ${state.sentBytes}")
-                    Text("Received bytes: ${state.receivedBytes}")
+                    Text("${text.sentMessages}: ${state.sentMessages}")
+                    Text("${text.receivedMessages}: ${state.receivedMessages}")
+                    Text("${text.sentBytes}: ${state.sentBytes}")
+                    Text("${text.receivedBytes}: ${state.receivedBytes}")
                 }
             }
 
             if (transfers.isNotEmpty()) {
-                Text("Transfers", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(text.transfers, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     transfers.take(4).forEach { transfer ->
                         Card(Modifier.fillMaxWidth()) {
                             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Text("${transfer.direction.label()}: ${transfer.name}", fontWeight = FontWeight.SemiBold)
+                                Text("${transfer.direction.label(text)}: ${transfer.name}", fontWeight = FontWeight.SemiBold)
                                 LinearProgressIndicator(
                                     progress = { transfer.percent / 100f },
                                     modifier = Modifier.fillMaxWidth()
                                 )
                                 Text(
-                                    "${transfer.percent}% - ${transfer.completedBytes}/${transfer.totalBytes} bytes${if (transfer.complete) " - complete" else ""}",
+                                    "${transfer.percent}% - ${transfer.completedBytes}/${transfer.totalBytes} ${text.bytes}${if (transfer.complete) " - ${text.complete}" else ""}",
                                     style = MaterialTheme.typography.bodySmall
                                 )
                             }
@@ -269,7 +290,7 @@ fun DirectLinkApp(
                 }
             }
 
-            Text("Activity", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(text.activity, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -285,6 +306,162 @@ fun DirectLinkApp(
             }
         }
     }
+}
+
+private enum class UiLanguage {
+    Ukrainian,
+    English
+}
+
+private data class UiText(
+    val settings: String,
+    val interfaceLanguage: String,
+    val packetPassword: String,
+    val initialize: String,
+    val createDlp: String,
+    val dlpFilePath: String,
+    val pickDlp: String,
+    val importDlp: String,
+    val connectDirect: String,
+    val relayUrl: String,
+    val relaySession: String,
+    val hostRelay: String,
+    val joinRelay: String,
+    val message: String,
+    val sendText: String,
+    val pickFile: String,
+    val sendFile: String,
+    val cancelTransfers: String,
+    val relayRequired: String,
+    val relayConnected: String,
+    val relay: String,
+    val session: String,
+    val notConfigured: String,
+    val sentMessages: String,
+    val receivedMessages: String,
+    val sentBytes: String,
+    val receivedBytes: String,
+    val transfers: String,
+    val activity: String,
+    val activityDlpPacket: String,
+    val activityIncomingText: String,
+    val activityIncomingFile: String,
+    val activitySendFailed: String,
+    val activityConnectionLost: String,
+    val sending: String,
+    val receiving: String,
+    val bytes: String,
+    val complete: String,
+    val phaseIdle: String,
+    val phaseGatheringNetwork: String,
+    val phaseReady: String,
+    val phasePacketGenerated: String,
+    val phaseAwaitingConnection: String,
+    val phaseConnected: String,
+    val phaseRelayRequired: String,
+    val phaseRelayConnected: String,
+    val phaseError: String
+)
+
+private fun uiText(language: UiLanguage): UiText = when (language) {
+    UiLanguage.Ukrainian -> UiText(
+        settings = "Налаштування",
+        interfaceLanguage = "Мова інтерфейсу",
+        packetPassword = "Пароль пакета",
+        initialize = "Підготувати",
+        createDlp = "Створити .dlp",
+        dlpFilePath = "Шлях до .dlp файла",
+        pickDlp = "Вибрати .dlp",
+        importDlp = "Імпортувати",
+        connectDirect = "З'єднати напряму",
+        relayUrl = "Адреса relay-сервера",
+        relaySession = "Код relay-сесії",
+        hostRelay = "Створити relay",
+        joinRelay = "Приєднатися",
+        message = "Повідомлення",
+        sendText = "Надіслати текст",
+        pickFile = "Вибрати файл",
+        sendFile = "Надіслати файл",
+        cancelTransfers = "Скасувати передачі",
+        relayRequired = "Потрібен relay",
+        relayConnected = "Relay підключено",
+        relay = "Relay",
+        session = "Сесія",
+        notConfigured = "не налаштовано",
+        sentMessages = "Надіслано повідомлень",
+        receivedMessages = "Отримано повідомлень",
+        sentBytes = "Надіслано байтів",
+        receivedBytes = "Отримано байтів",
+        transfers = "Передачі файлів",
+        activity = "Журнал подій",
+        activityDlpPacket = "DLP пакет",
+        activityIncomingText = "Вхідний текст",
+        activityIncomingFile = "Вхідний файл",
+        activitySendFailed = "Не вдалося надіслати",
+        activityConnectionLost = "Зв'язок втрачено",
+        sending = "Надсилання",
+        receiving = "Отримання",
+        bytes = "байтів",
+        complete = "завершено",
+        phaseIdle = "Очікування",
+        phaseGatheringNetwork = "Перевірка мережі",
+        phaseReady = "Готово",
+        phasePacketGenerated = "Пакет створено",
+        phaseAwaitingConnection = "Очікування з'єднання з",
+        phaseConnected = "Підключено до",
+        phaseRelayRequired = "Потрібен relay для",
+        phaseRelayConnected = "Relay-з'єднання з",
+        phaseError = "Помилка"
+    )
+    UiLanguage.English -> UiText(
+        settings = "Settings",
+        interfaceLanguage = "Interface language",
+        packetPassword = "Packet password",
+        initialize = "Initialize",
+        createDlp = "Create .dlp",
+        dlpFilePath = "DLP file path",
+        pickDlp = "Pick .dlp",
+        importDlp = "Import",
+        connectDirect = "Connect directly",
+        relayUrl = "Relay server URL",
+        relaySession = "Relay session code",
+        hostRelay = "Host relay",
+        joinRelay = "Join relay",
+        message = "Message",
+        sendText = "Send text",
+        pickFile = "Pick file",
+        sendFile = "Send file",
+        cancelTransfers = "Cancel transfers",
+        relayRequired = "Relay required",
+        relayConnected = "Relay connected",
+        relay = "Relay",
+        session = "Session",
+        notConfigured = "not configured",
+        sentMessages = "Sent messages",
+        receivedMessages = "Received messages",
+        sentBytes = "Sent bytes",
+        receivedBytes = "Received bytes",
+        transfers = "Transfers",
+        activity = "Activity",
+        activityDlpPacket = "DLP packet",
+        activityIncomingText = "Incoming text",
+        activityIncomingFile = "Incoming file",
+        activitySendFailed = "Send failed",
+        activityConnectionLost = "Connection lost",
+        sending = "Sending",
+        receiving = "Receiving",
+        bytes = "bytes",
+        complete = "complete",
+        phaseIdle = "Idle",
+        phaseGatheringNetwork = "Gathering network",
+        phaseReady = "Ready",
+        phasePacketGenerated = "Packet generated",
+        phaseAwaitingConnection = "Awaiting connection with",
+        phaseConnected = "Connected to",
+        phaseRelayRequired = "Relay required for",
+        phaseRelayConnected = "Relay connected to",
+        phaseError = "Error"
+    )
 }
 
 private data class ActivityItem(
@@ -316,9 +493,9 @@ private fun MutableList<TransferItem>.upsert(item: TransferItem) {
     while (size > 8) removeAt(lastIndex)
 }
 
-private fun FileTransferDirection.label(): String = when (this) {
-    FileTransferDirection.Sending -> "Sending"
-    FileTransferDirection.Receiving -> "Receiving"
+private fun FileTransferDirection.label(text: UiText): String = when (this) {
+    FileTransferDirection.Sending -> text.sending
+    FileTransferDirection.Receiving -> text.receiving
 }
 
 private fun defaultRelayUrl(): String {
@@ -331,14 +508,14 @@ private fun defaultRelayUrl(): String {
     }
 }
 
-private fun phaseText(phase: PeerPhase): String = when (phase) {
-    PeerPhase.Idle -> "Idle"
-    PeerPhase.GatheringNetwork -> "Gathering network"
-    is PeerPhase.Ready -> "Ready: ${phase.localIp}:${phase.udpPort}"
-    is PeerPhase.PacketGenerated -> "Packet generated: ${phase.dlpFile.name}"
-    is PeerPhase.AwaitingConnection -> "Awaiting connection with ${phase.peerName}"
-    is PeerPhase.Connected -> "Connected to ${phase.peerName}"
-    is PeerPhase.RelayRequired -> "Relay required for ${phase.peerName}"
-    is PeerPhase.RelayConnected -> "Relay connected to ${phase.peerName}"
-    is PeerPhase.Error -> "Error: ${phase.reason}"
+private fun phaseText(phase: PeerPhase, text: UiText): String = when (phase) {
+    PeerPhase.Idle -> text.phaseIdle
+    PeerPhase.GatheringNetwork -> text.phaseGatheringNetwork
+    is PeerPhase.Ready -> "${text.phaseReady}: ${phase.localIp}:${phase.udpPort}"
+    is PeerPhase.PacketGenerated -> "${text.phasePacketGenerated}: ${phase.dlpFile.name}"
+    is PeerPhase.AwaitingConnection -> "${text.phaseAwaitingConnection} ${phase.peerName}"
+    is PeerPhase.Connected -> "${text.phaseConnected} ${phase.peerName}"
+    is PeerPhase.RelayRequired -> "${text.phaseRelayRequired} ${phase.peerName}"
+    is PeerPhase.RelayConnected -> "${text.phaseRelayConnected} ${phase.peerName}"
+    is PeerPhase.Error -> "${text.phaseError}: ${phase.reason}"
 }
