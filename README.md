@@ -9,7 +9,7 @@ This repository currently contains a compact, build-oriented MVP scaffold:
 - `shared`: Kotlin Multiplatform shared model, peer facade, encrypted MVP DLP packet serializer, STUN/NAT detector, UDP hole-punching manager, encrypted UDP tunnel session for text and file frames, relay protocol handshake model, TCP relay transport, and Compose UI.
 - `desktop`: Compose Desktop application entrypoint plus a standalone relay server entrypoint.
 - `android`: Android application entrypoint and manifest.
-- GitHub Actions CI runs Gradle project checks, shared desktop tests, desktop compilation, and Android debug APK assembly through the Gradle Wrapper.
+- GitHub Actions CI runs Gradle project checks, shared desktop tests, relay smoke tests, desktop compilation, and Android debug APK assembly through the Gradle Wrapper.
 
 The DLP packet layer now has an explicit model, encrypted container format, password validation through AEAD authentication, TTL validation, peer public endpoint fields, and unit tests. The current MVP container uses PBKDF2-HMAC-SHA256 plus AES-GCM because those primitives are available from the JDK on desktop and Android. The next production hardening step is to switch the packet KDF/cipher suite to the intended Argon2id + ChaCha20-Poly1305 implementation.
 
@@ -74,6 +74,8 @@ This focused test starts an in-process relay server, creates two peers, imports 
 ## Local Relay Workflow
 
 Use the relay server when direct UDP punching fails or when you want to test the fallback path locally. Relay still needs both app sessions to import each other's `.dlp` packet first, because the packet provides the remote peer id and the shared password used for encrypted payload routing.
+
+The full manual walkthrough is available in [`docs/manual-relay-test.md`](docs/manual-relay-test.md).
 
 1. Start the relay server in one terminal and leave it running:
 
